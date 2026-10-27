@@ -63,8 +63,11 @@
   const FIREFLY_ATTRACT_RADIUS = 300;
   const FIREFLY_ATTRACT_PROB = 0.06;
   const FIREFLY_UP_DAMP = 0.45;
-  const FIREFLY_TURN_EASE = 0.025;  // 实际朝向追目标方向的平滑系数
-  const FIREFLY_DRIFT = 0.03;       // 目标方向自然漂移幅度
+  const FIREFLY_TURN_EASE = 0.025;
+  const FIREFLY_DRIFT = 0.03;
+
+  // 初始生成：约 45% 落在草丛高度区域
+  const FIREFLY_GRASS_SPAWN_RATIO = 0.45;
 
   // ---------- 鼠标 ----------
   const mouse = { x: -9999, y: -9999, active: false };
@@ -185,11 +188,23 @@
 
   function buildFireflies() {
     fireflies.length = 0;
+
     for (let i = 0; i < FIREFLY_COUNT; i++) {
       const angle = Math.random() * Math.PI * 2;
+
+      // 初始高度：部分在草丛区域，部分在上方
+      let y;
+      if (Math.random() < FIREFLY_GRASS_SPAWN_RATIO) {
+        // 草丛区域：底部 78% ~ 97% 高度（草最高约 18%）
+        y = H * (0.78 + Math.random() * 0.19);
+      } else {
+        // 上方区域：5% ~ 78%
+        y = H * (0.05 + Math.random() * 0.73);
+      }
+
       fireflies.push({
         x: Math.random() * W,
-        y: Math.random() * H * 0.92,
+        y,
         speed: 0.25 + Math.random() * 0.35,
         size: 1.2 + Math.random() * 1.5,
         wanderAngle: angle,
@@ -200,7 +215,6 @@
     }
   }
 
-  // 角度插值：走最短弧，避免从 -π 到 π 时绕一大圈
   function angleLerp(current, target, t) {
     let diff = target - current;
     while (diff > Math.PI) diff -= Math.PI * 2;
@@ -215,7 +229,7 @@
       const heightRatio = Math.min(1, Math.max(0, (H - f.y) / H));
       const upFactor = 1 - heightRatio * FIREFLY_UP_DAMP;
 
-      // 1) 目标方向自然小幅漂移，越靠近顶部向上漂移越容易被抑制
+      // 1) 目标方向自然小幅漂移
       let drift = (Math.random() - 0.5) * FIREFLY_DRIFT * dtf;
       const nextTarget = f.targetAngle + drift;
       const wouldGoUp = Math.sin(nextTarget) < 0;
@@ -224,7 +238,7 @@
       }
       f.targetAngle += drift;
 
-      // 2) 鼠标靠近：按概率把目标方向设成鼠标方向（带一点随机偏移）
+      // 2) 鼠标吸引
       if (mouse.active) {
         const dx = mouse.x - f.x;
         const dy = mouse.y - f.y;
@@ -236,13 +250,12 @@
           const prob = (1 - dist / R) * FIREFLY_ATTRACT_PROB * dtf;
 
           if (Math.random() < prob) {
-            // ±0.5 弧度随机偏移，避免所有萤火虫都精确对准鼠标
             f.targetAngle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 1.0;
           }
         }
       }
 
-      // 3) 边界：目标方向转向屏幕中心，而不是直接改实际朝向
+      // 3) 边界
       const margin = 12;
       if (f.x < margin || f.x > W - margin || f.y < margin || f.y > H - margin) {
         f.targetAngle = Math.atan2(H / 2 - f.y, W / 2 - f.x);
@@ -250,10 +263,10 @@
         f.y = Math.max(margin, Math.min(H - margin, f.y));
       }
 
-      // 4) 实际朝向平滑追向目标方向
+      // 4) 实际朝向平滑追向目标
       f.wanderAngle = angleLerp(f.wanderAngle, f.targetAngle, FIREFLY_TURN_EASE * dtf);
 
-      // 5) 沿实际朝向移动
+      // 5) 移动
       f.x += Math.cos(f.wanderAngle) * f.speed * dtf;
       f.y += Math.sin(f.wanderAngle) * f.speed * dtf;
     }
