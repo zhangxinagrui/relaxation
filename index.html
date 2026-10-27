@@ -52,8 +52,8 @@
   const WIND_DRIFT = 0.15;
 
   // ---------- 烟雾配置 ----------
-  const SMOKE_LIFE_MIN = 800;
-  const SMOKE_LIFE_MAX = 1600;
+  const SMOKE_LIFE_MIN = 900;
+  const SMOKE_LIFE_MAX = 1700;
   const SMOKE_STEP = 6;
   const MAX_STEPS_PER_MOVE = 60;
   const MAX_SMOKE = 700;
@@ -84,7 +84,7 @@
     sctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
   })();
 
-  function spawnSmoke(x, y, dirX, dirY, speed) {
+  function spawnSmoke(x, y) {
     if (smoke.length >= MAX_SMOKE) return;
 
     const now = performance.now();
@@ -95,16 +95,11 @@
     smoke.push({
       x: x + ox,
       y: y + oy,
-      // 初速度：沿运动方向 + 随机扰动（去掉了原来的向上偏移）
-      vx: dirX * (0.15 + speed * 0.08) + (Math.random() - 0.5) * 0.35,
-      vy: dirY * (0.15 + speed * 0.08) + (Math.random() - 0.5) * 0.35,
       r0: 6 + Math.random() * 9,
       r1: 24 + Math.random() * 26,
       life: SMOKE_LIFE_MIN + Math.random() * (SMOKE_LIFE_MAX - SMOKE_LIFE_MIN),
       birth: now,
-      alpha: 0.09 + Math.random() * 0.09,
-      swayPhase: Math.random() * Math.PI * 2,
-      swayAmp: 0.15 + Math.random() * 0.25
+      alpha: 0.09 + Math.random() * 0.09
     });
   }
 
@@ -124,10 +119,6 @@
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist > 0.5) {
-      const dirX = dx / dist;
-      const dirY = dy / dist;
-      const speed = Math.min(dist, 40);
-
       const steps = Math.min(
         MAX_STEPS_PER_MOVE,
         Math.max(1, Math.ceil(dist / SMOKE_STEP))
@@ -135,11 +126,7 @@
 
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
-        spawnSmoke(
-          lastX + dx * t,
-          lastY + dy * t,
-          dirX, dirY, speed
-        );
+        spawnSmoke(lastX + dx * t, lastY + dy * t);
       }
     }
 
@@ -220,8 +207,8 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // ---------- 烟雾绘制（去掉上浮） ----------
-  function drawSmoke(now, dt) {
+  // ---------- 烟雾绘制：位置固定，只扩散和变淡 ----------
+  function drawSmoke(now) {
     for (let i = smoke.length - 1; i >= 0; i--) {
       const p = smoke[i];
       const age = (now - p.birth) / p.life;
@@ -231,14 +218,7 @@
         continue;
       }
 
-      // 速度衰减 + 横向摆动，没有向上的加速度
-      p.vx *= 0.992;
-      p.vy *= 0.992;
-      const sway = Math.sin(age * Math.PI * 2 + p.swayPhase) * p.swayAmp;
-
-      p.x += (p.vx + sway) * (dt / 16);
-      p.y += p.vy * (dt / 16);
-
+      // 位置不更新，原地扩散
       const r = p.r0 + (p.r1 - p.r0) * Math.pow(age, 0.7);
 
       const fadeIn = Math.min(1, age / 0.12);
@@ -263,7 +243,7 @@
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
-    drawSmoke(now, dt);
+    drawSmoke(now);
 
     // 草丛（原有逻辑，完全未改）
     const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
