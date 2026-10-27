@@ -37,13 +37,13 @@
 
   let W = 0, H = 0, dpr = 1;
 
-  // ---------- 草配置（保持不变） ----------
+  // ---------- 草配置（更软） ----------
   const BLADE_COUNT_BASE = 380;
   const BLADE_MIN_HEIGHT = 0.06;
   const BLADE_MAX_HEIGHT = 0.18;
   const BLADE_WIDTH_MIN = 2.0;
   const BLADE_WIDTH_MAX = 4.5;
-  const SWAY_AMPLITUDE = 7;
+  const SWAY_AMPLITUDE = 9;          // 摇曳幅度略增
   const SWAY_SPEED = 0.00055;
   const MOUSE_RADIUS = 130;
   const MOUSE_PUSH = 75;
@@ -51,7 +51,7 @@
   const DAMPING = 0.91;
   const WIND_DRIFT = 0.15;
 
-  // ---------- 烟雾配置（保持不变） ----------
+  // ---------- 烟雾配置 ----------
   const SMOKE_LIFE_MIN = 900;
   const SMOKE_LIFE_MAX = 1700;
   const SMOKE_STEP = 2;
@@ -65,8 +65,6 @@
   const FIREFLY_UP_DAMP = 0.45;
   const FIREFLY_TURN_EASE = 0.025;
   const FIREFLY_DRIFT = 0.03;
-
-  // 初始生成：约 45% 落在草丛高度区域
   const FIREFLY_GRASS_SPAWN_RATIO = 0.45;
 
   // ---------- 鼠标 ----------
@@ -188,17 +186,13 @@
 
   function buildFireflies() {
     fireflies.length = 0;
-
     for (let i = 0; i < FIREFLY_COUNT; i++) {
       const angle = Math.random() * Math.PI * 2;
 
-      // 初始高度：部分在草丛区域，部分在上方
       let y;
       if (Math.random() < FIREFLY_GRASS_SPAWN_RATIO) {
-        // 草丛区域：底部 78% ~ 97% 高度（草最高约 18%）
         y = H * (0.78 + Math.random() * 0.19);
       } else {
-        // 上方区域：5% ~ 78%
         y = H * (0.05 + Math.random() * 0.73);
       }
 
@@ -229,7 +223,6 @@
       const heightRatio = Math.min(1, Math.max(0, (H - f.y) / H));
       const upFactor = 1 - heightRatio * FIREFLY_UP_DAMP;
 
-      // 1) 目标方向自然小幅漂移
       let drift = (Math.random() - 0.5) * FIREFLY_DRIFT * dtf;
       const nextTarget = f.targetAngle + drift;
       const wouldGoUp = Math.sin(nextTarget) < 0;
@@ -238,7 +231,6 @@
       }
       f.targetAngle += drift;
 
-      // 2) 鼠标吸引
       if (mouse.active) {
         const dx = mouse.x - f.x;
         const dy = mouse.y - f.y;
@@ -255,7 +247,6 @@
         }
       }
 
-      // 3) 边界
       const margin = 12;
       if (f.x < margin || f.x > W - margin || f.y < margin || f.y > H - margin) {
         f.targetAngle = Math.atan2(H / 2 - f.y, W / 2 - f.x);
@@ -263,10 +254,8 @@
         f.y = Math.max(margin, Math.min(H - margin, f.y));
       }
 
-      // 4) 实际朝向平滑追向目标
       f.wanderAngle = angleLerp(f.wanderAngle, f.targetAngle, FIREFLY_TURN_EASE * dtf);
 
-      // 5) 移动
       f.x += Math.cos(f.wanderAngle) * f.speed * dtf;
       f.y += Math.sin(f.wanderAngle) * f.speed * dtf;
     }
@@ -289,7 +278,7 @@
     ctx.globalAlpha = 1;
   }
 
-  // ---------- 草叶（保持不变） ----------
+  // ---------- 草叶 ----------
   const blades = [];
 
   function randomBetween(a, b) {
@@ -310,10 +299,10 @@
         baseY: H + 6,
         height,
         baseWidth: randomBetween(BLADE_WIDTH_MIN, BLADE_WIDTH_MAX),
-        bend: randomBetween(-14, 14),
+        bend: randomBetween(-22, 22),               // 静态弯曲更大
         phase: Math.random() * Math.PI * 2,
         speedJitter: randomBetween(0.6, 1.4),
-        alpha: randomBetween(0.22, 0.44),
+        alpha: randomBetween(0.18, 0.38),           // 不透明度稍收
         offset: 0,
         velocity: 0,
         targetOffset: 0
@@ -340,7 +329,7 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // ---------- 烟雾绘制（保持不变） ----------
+  // ---------- 烟雾绘制 ----------
   function drawSmoke(now) {
     for (let i = smoke.length - 1; i >= 0; i--) {
       const p = smoke[i];
@@ -380,7 +369,7 @@
     updateFireflies(now, dt);
     drawFireflies(now);
 
-    // 草丛（原有逻辑，完全未改）
+    // ---------- 草丛 ----------
     const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
 
     for (const b of blades) {
@@ -417,9 +406,10 @@
       const leftBaseX = b.baseX - halfW;
       const rightBaseX = b.baseX + halfW;
 
-      const ctrlY = b.baseY - b.height * 0.55;
-      const leftCtrlX = leftBaseX + (tipX - leftBaseX) * 0.35 - halfW * 0.9;
-      const rightCtrlX = rightBaseX + (tipX - rightBaseX) * 0.35 + halfW * 0.9;
+      // 控制点：稍微上移 + 向外鼓得更多，底部轮廓更圆润柔软
+      const ctrlY = b.baseY - b.height * 0.58;
+      const leftCtrlX = leftBaseX + (tipX - leftBaseX) * 0.32 - halfW * 1.15;
+      const rightCtrlX = rightBaseX + (tipX - rightBaseX) * 0.32 + halfW * 1.15;
 
       ctx.beginPath();
       ctx.moveTo(leftBaseX, b.baseY);
