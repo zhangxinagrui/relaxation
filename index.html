@@ -51,12 +51,12 @@
   const DAMPING = 0.91;
   const WIND_DRIFT = 0.15;
 
-  // ---------- 烟雾配置 ----------
+  // ---------- 烟雾配置（密度提高） ----------
   const SMOKE_LIFE_MIN = 900;
   const SMOKE_LIFE_MAX = 1700;
-  const SMOKE_STEP = 6;
-  const MAX_STEPS_PER_MOVE = 60;
-  const MAX_SMOKE = 700;
+  const SMOKE_STEP = 2;              // 每 2px 生成一个粒子（原来 6）
+  const MAX_STEPS_PER_MOVE = 240;    // 单次移动最多插值点（原来 60）
+  const MAX_SMOKE = 2200;            // 粒子上限（原来 700）
 
   // ---------- 鼠标 ----------
   const mouse = { x: -9999, y: -9999, active: false };
@@ -99,7 +99,8 @@
       r1: 24 + Math.random() * 26,
       life: SMOKE_LIFE_MIN + Math.random() * (SMOKE_LIFE_MAX - SMOKE_LIFE_MIN),
       birth: now,
-      alpha: 0.09 + Math.random() * 0.09
+      // 粒子多了会叠加变亮，单粒透明度稍微收一点
+      alpha: 0.06 + Math.random() * 0.06
     });
   }
 
@@ -119,6 +120,7 @@
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist > 0.5) {
+      // 按 2px 步长插值；上限 240 点，覆盖约 480px 的单帧跳动
       const steps = Math.min(
         MAX_STEPS_PER_MOVE,
         Math.max(1, Math.ceil(dist / SMOKE_STEP))
@@ -207,7 +209,7 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // ---------- 烟雾绘制：位置固定，只扩散和变淡 ----------
+  // ---------- 烟雾绘制：原地扩散 ----------
   function drawSmoke(now) {
     for (let i = smoke.length - 1; i >= 0; i--) {
       const p = smoke[i];
@@ -218,14 +220,13 @@
         continue;
       }
 
-      // 位置不更新，原地扩散
       const r = p.r0 + (p.r1 - p.r0) * Math.pow(age, 0.7);
 
       const fadeIn = Math.min(1, age / 0.12);
       const fadeOut = Math.pow(1 - age, 1.9);
       const alpha = p.alpha * fadeIn * fadeOut;
 
-      if (alpha < 0.004) continue;
+      if (alpha < 0.003) continue;
 
       ctx.globalAlpha = alpha;
       ctx.drawImage(smokeSprite, p.x - r, p.y - r, r * 2, r * 2);
