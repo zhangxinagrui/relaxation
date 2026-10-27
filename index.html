@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Relaxation</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #000000;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      cursor: crosshair;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="grass-canvas"></canvas>
+
+<script>
+(function () {
+  const canvas = document.getElementById('grass-canvas');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0, dpr = 1;
+
+  // ---------- 配置 ----------
+  const BLADE_COUNT_BASE = 180;      // 基准草叶数量（会随宽度微调）
+  const BLADE_MIN_HEIGHT = 0.12;     // 草高占屏幕高度的最小比例
+  const BLADE_MAX_HEIGHT = 0.34;     // 最大比例
+  const BLADE_WIDTH_MIN = 0.8;       // 草叶最小线宽
+  const BLADE_WIDTH_MAX = 1.4;       // 最大线宽
+  const SWAY_AMPLITUDE = 9;          // 自然摇曳幅度（px）
+  const SWAY_SPEED = 0.00055;        // 摇曳速度
+  const MOUSE_RADIUS = 110;          // 鼠标影响半径（px）
+  const MOUSE_PUSH = 60;             // 鼠标最大推开距离（px）
+  const SPRING = 0.09;               // 回弹刚度
+  const DAMPING = 0.82;              // 阻尼（越接近1回弹越慢越柔和）
+  const WIND_DRIFT = 0.18;           // 全局微风左右漂移
+
+  // ---------- 鼠标 ----------
+  const mouse = { x: -9999, y: -9999, active: false };
+  window.addEventListener('mousemove', (e) => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    mouse.active = true;
+  });
+  window.addEventListener('mouseleave', () => {
+    mouse.active = false;
+    mouse.x = -9999;
+    mouse.y = -9999;
+  });
+  window.addEventListener('touchmove', (e) => {
+    const t = e.touches[0];
+    if (t) {
+      mouse.x = t.clientX;
+      mouse.y = t.clientY;
+      mouse.active = true;
+    }
+  }, { passive: true });
+  window.addEventListener('touchend', () => {
+    mouse.active = false;
+    mouse.x = -9999;
+    mouse.y = -9999;
+  });
+
+  // ---------- 草叶 ----------
+  const blades = [];
+
+  function randomBetween(a, b) {
+    return a + Math.random() * (b - a);
+  }
+
+  function buildBlades() {
+    blades.length = 0;
+
+    // 根据宽度调整数量，保证大屏不稀、小屏不卡
+    const count = Math.floor(BLADE_COUNT_BASE * Math.max(0.6, W / 1400));
+
+    for (let i = 0; i < count; i++) {
+      const baseX = Math.random() * W;
+      const heightRatio = randomBetween(BLADE_MIN_HEIGHT, BLADE_MAX_HEIGHT);
+      const height = H * heightRatio;
+
+      blades.push({
+        baseX,
+        baseY: H + 4,                       // 根部略低于屏幕底边，视觉上更自然
+        height,
+        width: randomBetween(BLADE_WIDTH_MIN, BLADE_WIDTH_MAX),
+        phase: Math.random() * Math.PI * 2, // 摇曳相位错开
+        speedJitter: randomBetween(0.7, 1.3),
+        // 动态部分
+        offset: 0,      // 当前横向偏移
+        velocity: 0,    // 偏移速度（用于弹簧回弹）
+        targetOffset: 0 // 目标偏移
+      });
+    }
+  }
+
+  // ---------- 尺寸 ----------
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    buildBlades();
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // ---------- 主循环 ----------
+  let lastTime = performance.now();
+
+  function frame(now) {
+    const dt = Math.min(now - lastTime, 32); // 限制最大步长，避免切页后跳变
+    lastTime = now;
+
+    // 纯黑背景
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    // 全局柔和“风”的横向漂移，让整片草微微左右呼吸
+    const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
+
+    for (const b of blades) {
+      // 1) 自然摇曳：正弦 + 相位
+      const sway =
+        Math.sin(now * SWAY_SPEED * b.speedJitter + b.phase) * SWAY_AMPLITUDE;
+
+      // 2) 鼠标拨开：计算根部到鼠标的水平距离，只有草尖在影响半径内才被推开
+      let push = 0;
+      if (mouse.active) {
+        // 草尖大致位置
+        const tipX = b.baseX + sway + globalSway;
+        const tipY = b.baseY - b.height;
+
+        const dx = tipX - mouse.x;
+        const dy = tipY - mouse.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < MOUSE_RADIUS && dist > 0.001) {
+          // 越靠近鼠标，推开力度越大；方向为远离鼠标水平方向
+          const force = (1 - dist / MOUSE_RADIUS) * MOUSE_PUSH;
+          const dir = dx >= 0 ? 1 : -1;
+          push = dir * force;
+        }
+      }
+
+      b.targetOffset = push;
+
+      // 3) 弹簧 + 阻尼，平滑逼近目标偏移（拨开和恢复都柔和）
+      const force = (b.targetOffset - b.offset) * SPRING;
+      b.velocity += force;
+      b.velocity *= DAMPING;
+      b.offset += b.velocity;
+
+      // 4) 绘制草叶：二次贝塞尔曲线，根部固定，草尖带偏移
+      const tipX = b.baseX + sway + globalSway + b.offset;
+      const tipY = b.baseY - b.height;
+
+      // 控制点放在草叶中上部，让弯曲弧度更自然
+      const ctrlX = b.baseX + (tipX - b.baseX) * 0.35;
+      const ctrlY = b.baseY - b.height * 0.55;
+
+      ctx.beginPath();
+      ctx.moveTo(b.baseX, b.baseY);
+      ctx.quadraticCurveTo(ctrlX, ctrlY, tipX, tipY);
+
+      // 细草：低不透明度白色，根部略淡、草尖略亮，形成轻盈的层次
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.lineWidth = b.width;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // 草尖额外描一层更亮的短线，模拟光线落在尖端
+      ctx.beginPath();
+      ctx.moveTo(
+        b.baseX + (tipX - b.baseX) * 0.72,
+        b.baseY - b.height * 0.72
+      );
+      ctx.lineTo(tipX, tipY);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = b.width * 0.85;
+      ctx.stroke();
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+
+</body>
+</html>
