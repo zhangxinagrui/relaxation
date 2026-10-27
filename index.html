@@ -51,85 +51,89 @@
   const DAMPING = 0.91;
   const WIND_DRIFT = 0.15;
 
-  // ---------- 涟漪配置（改为纯白 + 通透层次） ----------
-  const RIPPLE_LIFE = 1900;          // 生命周期
-  const RIPPLE_START_RADIUS = 2;
-  const RIPPLE_MAX_RADIUS_MIN = 55;
-  const RIPPLE_MAX_RADIUS_MAX = 120;
-  const RIPPLE_SPAWN_DIST = 14;
-  const RIPPLE_SPAWN_INTERVAL = 26;
+  // ---------- 水纹配置 ----------
+  const WATER_LIFE = 1500;       // 水纹生命期
+  const SPAWN_DIST = 5;          // 每移动多少像素生成一个水纹采样点
+  const MAX_WATER_POINTS = 260;  // 采样点上限，防止极端情况堆积
+  const ARC_COUNT = 5;           // 每个采样点的弧线数量
 
   // ---------- 鼠标 ----------
   const mouse = { x: -9999, y: -9999, active: false };
 
-  // ---------- 涟漪数据 ----------
-  const ripples = [];
-  let lastRippleX = -9999;
-  let lastRippleY = -9999;
-  let lastRippleTime = 0;
+  // ---------- 水纹采样点 ----------
+  const waterPoints = [];
+  let lastWaterX = -9999;
+  let lastWaterY = -9999;
 
-  function spawnRipple(x, y, now) {
-    ripples.push({
-      x, y,
-      birth: now,
-      life: RIPPLE_LIFE,
-      maxRadius: RIPPLE_MAX_RADIUS_MIN +
-                 Math.random() * (RIPPLE_MAX_RADIUS_MAX - RIPPLE_MAX_RADIUS_MIN),
-      startRadius: RIPPLE_START_RADIUS,
-      // 每个涟漪的初始旋转角，让波纹不完全是标准同心圆，略有手工感
-      angleOffset: Math.random() * Math.PI * 2
+  function pushWaterPoint(x, y, now, vx, vy, speed) {
+    if (waterPoints.length >= MAX_WATER_POINTS) return;
+    waterPoints.push({
+      x, y, time: now,
+      vx, vy, speed,
+      // 每条弧线的随机扰动，避免所有弧线完全规整
+      jitter: Math.random() * 0.6 + 0.7
     });
   }
 
-  window.addEventListener('mousemove', (e) => {
-    mouse.x = e.clientX;
-    mouse.y = e.clientY;
+  function handleMove(x, y) {
+    mouse.x = x;
+    mouse.y = y;
     mouse.active = true;
 
     const now = performance.now();
-    const dx = e.clientX - lastRippleX;
-    const dy = e.clientY - lastRippleY;
+
+    if (lastWaterX < -9000) {
+      lastWaterX = x;
+      lastWaterY = y;
+      return;
+    }
+
+    const dx = x - lastWaterX;
+    const dy = y - lastWaterY;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist > RIPPLE_SPAWN_DIST && now - lastRippleTime > RIPPLE_SPAWN_INTERVAL) {
-      spawnRipple(e.clientX, e.clientY, now);
-      lastRippleX = e.clientX;
-      lastRippleY = e.clientY;
-      lastRippleTime = now;
+    if (dist > 0.5) {
+      const vx = dx / dist;
+      const vy = dy / dist;
+      const speed = Math.min(dist / 8, 3);
+
+      // 在两点之间插值，保证快速移动时尾迹也连续
+      const steps = Math.max(1, Math.ceil(dist / SPAWN_DIST));
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        pushWaterPoint(
+          lastWaterX + dx * t,
+          lastWaterY + dy * t,
+          now, vx, vy, speed
+        );
+      }
     }
-  });
+
+    lastWaterX = x;
+    lastWaterY = y;
+  }
+
+  window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
 
   window.addEventListener('mouseleave', () => {
     mouse.active = false;
     mouse.x = -9999;
     mouse.y = -9999;
+    lastWaterX = -9999;
+    lastWaterY = -9999;
   });
 
   window.addEventListener('touchmove', (e) => {
     const t = e.touches[0];
-    if (t) {
-      mouse.x = t.clientX;
-      mouse.y = t.clientY;
-      mouse.active = true;
-
-      const now = performance.now();
-      const dx = t.clientX - lastRippleX;
-      const dy = t.clientY - lastRippleY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      if (dist > RIPPLE_SPAWN_DIST && now - lastRippleTime > RIPPLE_SPAWN_INTERVAL) {
-        spawnRipple(t.clientX, t.clientY, now);
-        lastRippleX = t.clientX;
-        lastRippleY = t.clientY;
-        lastRippleTime = now;
-      }
-    }
+    if (t) handleMove(t.clientX, t.clientY);
   }, { passive: true });
 
   window.addEventListener('touchend', () => {
     mouse.active = false;
     mouse.x = -9999;
     mouse.y = -9999;
+    lastWaterX = -9999;
+    lastWaterY = -9999;
   });
 
   // ---------- 草叶（保持不变） ----------
@@ -182,59 +186,69 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // ---------- 涟漪绘制：纯白 + 三层通透圆环 ----------
-  function drawRipples(now) {
-    for (let i = ripples.length - 1; i >= 0; i--) {
-      const r = ripples[i];
-      const t = (now - r.birth) / r.life;
-      if (t >= 1) {
-        ripples.splice(i, 1);
+  // ---------- 水流尾迹绘制 ----------
+  function drawWater(now) {
+    for (let i = waterPoints.length - 1; i >= 0; i--) {
+      const p = waterPoints[i];
+      const age = (now - p.time) / WATER_LIFE;
+      if (age >= 1) {
+        waterPoints.splice(i, 1);
         continue;
       }
 
-      // 半径扩散：先快后慢
-      const ease = 1 - Math.pow(1 - t, 2.2);
-      const radius = r.startRadius + (r.maxRadius - r.startRadius) * ease;
+      // 透明度：二次衰减，尾段柔和融入黑色
+      const fade = Math.pow(1 - age, 2);
+      // 扩散范围：随时间变大，速度快的划得更开
+      const spread = 5 + age * (55 + p.speed * 12);
+      // 垂直于运动方向的角度
+      const perpAngle = Math.atan2(p.vx, -p.vy);
 
-      // 主环透明度：二次衰减
-      const fade = (1 - t) * (1 - t);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(perpAngle);
 
-      // ---- 第一层：外环，最亮、最清晰 ----
+      // 一组弧形水纹，中间长、两侧短，像被划开的扇形
+      for (let k = 0; k < ARC_COUNT; k++) {
+        const frac = k / (ARC_COUNT - 1);       // 0 → 1
+        const t = frac - 0.5;                   // -0.5 → 0.5
+        const len = spread * (1 - Math.abs(t) * 1.5) * p.jitter;
+        if (len < 0.6) continue;
+
+        const yOff = t * spread * 0.85;
+        // 透明度：中心弧线亮，两侧弧线淡
+        const alpha = 0.34 * fade * (1 - Math.abs(t) * 0.85);
+        if (alpha < 0.005) continue;
+
+        // 弯曲：越靠近两侧弯曲越明显，且随年龄逐渐回直
+        const curve = spread * 0.18 * (t >= 0 ? 1 : -1) * (1 - age) * p.jitter;
+
+        ctx.beginPath();
+        ctx.moveTo(-len, yOff);
+        ctx.quadraticCurveTo(0, yOff + curve, len, yOff);
+        ctx.strokeStyle = 'rgba(255, 255, 255, ' + alpha + ')';
+        ctx.lineWidth = 0.8;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    // 鼠标当前位置的柔和光晕：像水面被指尖压出的高光
+    if (mouse.active) {
+      const glowR = 55;
+      const grad = ctx.createRadialGradient(
+        mouse.x, mouse.y, 0,
+        mouse.x, mouse.y, glowR
+      );
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.055)');
+      grad.addColorStop(0.55, 'rgba(255, 255, 255, 0.02)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+      ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.5 * fade) + ')';
-      ctx.lineWidth = 1.1;
-      ctx.stroke();
-
-      // ---- 第二层：中环，略微滞后，透明度更低 ----
-      const midT = Math.max(0, t - 0.09);
-      if (midT < 1) {
-        const midEase = 1 - Math.pow(1 - midT, 2.2);
-        const midR = r.startRadius + (r.maxRadius * 0.68 - r.startRadius) * midEase;
-        const midFade = (1 - midT) * (1 - midT);
-        if (midR > 0.5) {
-          ctx.beginPath();
-          ctx.arc(r.x, r.y, midR, 0, Math.PI * 2);
-          ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.28 * midFade) + ')';
-          ctx.lineWidth = 0.9;
-          ctx.stroke();
-        }
-      }
-
-      // ---- 第三层：内环，最淡最细，营造水波的柔润感 ----
-      const inT = Math.max(0, t - 0.18);
-      if (inT < 1) {
-        const inEase = 1 - Math.pow(1 - inT, 2.2);
-        const inR = r.startRadius + (r.maxRadius * 0.42 - r.startRadius) * inEase;
-        const inFade = (1 - inT) * (1 - inT);
-        if (inR > 0.5) {
-          ctx.beginPath();
-          ctx.arc(r.x, r.y, inR, 0, Math.PI * 2);
-          ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.15 * inFade) + ')';
-          ctx.lineWidth = 0.7;
-          ctx.stroke();
-        }
-      }
+      ctx.arc(mouse.x, mouse.y, glowR, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
@@ -249,8 +263,8 @@
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
-    // 2) 白色涟漪
-    drawRipples(now);
+    // 2) 水流尾迹
+    drawWater(now);
 
     // 3) 草丛（原有逻辑，完全未改）
     const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
