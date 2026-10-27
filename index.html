@@ -51,27 +51,60 @@
   const DAMPING = 0.91;
   const WIND_DRIFT = 0.15;
 
-  // ---------- 水纹配置 ----------
-  const WATER_LIFE = 1500;       // 水纹生命期
-  const SPAWN_DIST = 5;          // 每移动多少像素生成一个水纹采样点
-  const MAX_WATER_POINTS = 260;  // 采样点上限，防止极端情况堆积
-  const ARC_COUNT = 5;           // 每个采样点的弧线数量
+  // ---------- 烟雾配置 ----------
+  const SMOKE_LIFE_MIN = 800;
+  const SMOKE_LIFE_MAX = 1600;
+  const SMOKE_STEP = 6;
+  const MAX_STEPS_PER_MOVE = 60;
+  const MAX_SMOKE = 700;
 
   // ---------- 鼠标 ----------
   const mouse = { x: -9999, y: -9999, active: false };
 
-  // ---------- 水纹采样点 ----------
-  const waterPoints = [];
-  let lastWaterX = -9999;
-  let lastWaterY = -9999;
+  // ---------- 烟雾粒子 ----------
+  const smoke = [];
+  let lastX = -9999;
+  let lastY = -9999;
 
-  function pushWaterPoint(x, y, now, vx, vy, speed) {
-    if (waterPoints.length >= MAX_WATER_POINTS) return;
-    waterPoints.push({
-      x, y, time: now,
-      vx, vy, speed,
-      // 每条弧线的随机扰动，避免所有弧线完全规整
-      jitter: Math.random() * 0.6 + 0.7
+  const SPRITE_SIZE = 128;
+  const smokeSprite = document.createElement('canvas');
+  smokeSprite.width = SPRITE_SIZE;
+  smokeSprite.height = SPRITE_SIZE;
+  (function makeSprite() {
+    const sctx = smokeSprite.getContext('2d');
+    const g = sctx.createRadialGradient(
+      SPRITE_SIZE / 2, SPRITE_SIZE / 2, 0,
+      SPRITE_SIZE / 2, SPRITE_SIZE / 2, SPRITE_SIZE / 2
+    );
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+    g.addColorStop(0.7, 'rgba(255,255,255,0.16)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    sctx.fillStyle = g;
+    sctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
+  })();
+
+  function spawnSmoke(x, y, dirX, dirY, speed) {
+    if (smoke.length >= MAX_SMOKE) return;
+
+    const now = performance.now();
+    const spread = 7;
+    const ox = (Math.random() - 0.5) * spread;
+    const oy = (Math.random() - 0.5) * spread;
+
+    smoke.push({
+      x: x + ox,
+      y: y + oy,
+      // 初速度：沿运动方向 + 随机扰动（去掉了原来的向上偏移）
+      vx: dirX * (0.15 + speed * 0.08) + (Math.random() - 0.5) * 0.35,
+      vy: dirY * (0.15 + speed * 0.08) + (Math.random() - 0.5) * 0.35,
+      r0: 6 + Math.random() * 9,
+      r1: 24 + Math.random() * 26,
+      life: SMOKE_LIFE_MIN + Math.random() * (SMOKE_LIFE_MAX - SMOKE_LIFE_MIN),
+      birth: now,
+      alpha: 0.09 + Math.random() * 0.09,
+      swayPhase: Math.random() * Math.PI * 2,
+      swayAmp: 0.15 + Math.random() * 0.25
     });
   }
 
@@ -80,37 +113,38 @@
     mouse.y = y;
     mouse.active = true;
 
-    const now = performance.now();
-
-    if (lastWaterX < -9000) {
-      lastWaterX = x;
-      lastWaterY = y;
+    if (lastX < -9000) {
+      lastX = x;
+      lastY = y;
       return;
     }
 
-    const dx = x - lastWaterX;
-    const dy = y - lastWaterY;
+    const dx = x - lastX;
+    const dy = y - lastY;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist > 0.5) {
-      const vx = dx / dist;
-      const vy = dy / dist;
-      const speed = Math.min(dist / 8, 3);
+      const dirX = dx / dist;
+      const dirY = dy / dist;
+      const speed = Math.min(dist, 40);
 
-      // 在两点之间插值，保证快速移动时尾迹也连续
-      const steps = Math.max(1, Math.ceil(dist / SPAWN_DIST));
+      const steps = Math.min(
+        MAX_STEPS_PER_MOVE,
+        Math.max(1, Math.ceil(dist / SMOKE_STEP))
+      );
+
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
-        pushWaterPoint(
-          lastWaterX + dx * t,
-          lastWaterY + dy * t,
-          now, vx, vy, speed
+        spawnSmoke(
+          lastX + dx * t,
+          lastY + dy * t,
+          dirX, dirY, speed
         );
       }
     }
 
-    lastWaterX = x;
-    lastWaterY = y;
+    lastX = x;
+    lastY = y;
   }
 
   window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
@@ -119,8 +153,8 @@
     mouse.active = false;
     mouse.x = -9999;
     mouse.y = -9999;
-    lastWaterX = -9999;
-    lastWaterY = -9999;
+    lastX = -9999;
+    lastY = -9999;
   });
 
   window.addEventListener('touchmove', (e) => {
@@ -132,8 +166,8 @@
     mouse.active = false;
     mouse.x = -9999;
     mouse.y = -9999;
-    lastWaterX = -9999;
-    lastWaterY = -9999;
+    lastX = -9999;
+    lastY = -9999;
   });
 
   // ---------- 草叶（保持不变） ----------
@@ -186,70 +220,37 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // ---------- 水流尾迹绘制 ----------
-  function drawWater(now) {
-    for (let i = waterPoints.length - 1; i >= 0; i--) {
-      const p = waterPoints[i];
-      const age = (now - p.time) / WATER_LIFE;
+  // ---------- 烟雾绘制（去掉上浮） ----------
+  function drawSmoke(now, dt) {
+    for (let i = smoke.length - 1; i >= 0; i--) {
+      const p = smoke[i];
+      const age = (now - p.birth) / p.life;
+
       if (age >= 1) {
-        waterPoints.splice(i, 1);
+        smoke.splice(i, 1);
         continue;
       }
 
-      // 透明度：二次衰减，尾段柔和融入黑色
-      const fade = Math.pow(1 - age, 2);
-      // 扩散范围：随时间变大，速度快的划得更开
-      const spread = 5 + age * (55 + p.speed * 12);
-      // 垂直于运动方向的角度
-      const perpAngle = Math.atan2(p.vx, -p.vy);
+      // 速度衰减 + 横向摆动，没有向上的加速度
+      p.vx *= 0.992;
+      p.vy *= 0.992;
+      const sway = Math.sin(age * Math.PI * 2 + p.swayPhase) * p.swayAmp;
 
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(perpAngle);
+      p.x += (p.vx + sway) * (dt / 16);
+      p.y += p.vy * (dt / 16);
 
-      // 一组弧形水纹，中间长、两侧短，像被划开的扇形
-      for (let k = 0; k < ARC_COUNT; k++) {
-        const frac = k / (ARC_COUNT - 1);       // 0 → 1
-        const t = frac - 0.5;                   // -0.5 → 0.5
-        const len = spread * (1 - Math.abs(t) * 1.5) * p.jitter;
-        if (len < 0.6) continue;
+      const r = p.r0 + (p.r1 - p.r0) * Math.pow(age, 0.7);
 
-        const yOff = t * spread * 0.85;
-        // 透明度：中心弧线亮，两侧弧线淡
-        const alpha = 0.34 * fade * (1 - Math.abs(t) * 0.85);
-        if (alpha < 0.005) continue;
+      const fadeIn = Math.min(1, age / 0.12);
+      const fadeOut = Math.pow(1 - age, 1.9);
+      const alpha = p.alpha * fadeIn * fadeOut;
 
-        // 弯曲：越靠近两侧弯曲越明显，且随年龄逐渐回直
-        const curve = spread * 0.18 * (t >= 0 ? 1 : -1) * (1 - age) * p.jitter;
+      if (alpha < 0.004) continue;
 
-        ctx.beginPath();
-        ctx.moveTo(-len, yOff);
-        ctx.quadraticCurveTo(0, yOff + curve, len, yOff);
-        ctx.strokeStyle = 'rgba(255, 255, 255, ' + alpha + ')';
-        ctx.lineWidth = 0.8;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-      }
-
-      ctx.restore();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(smokeSprite, p.x - r, p.y - r, r * 2, r * 2);
     }
-
-    // 鼠标当前位置的柔和光晕：像水面被指尖压出的高光
-    if (mouse.active) {
-      const glowR = 55;
-      const grad = ctx.createRadialGradient(
-        mouse.x, mouse.y, 0,
-        mouse.x, mouse.y, glowR
-      );
-      grad.addColorStop(0, 'rgba(255, 255, 255, 0.055)');
-      grad.addColorStop(0.55, 'rgba(255, 255, 255, 0.02)');
-      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(mouse.x, mouse.y, glowR, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    ctx.globalAlpha = 1;
   }
 
   // ---------- 主循环 ----------
@@ -259,14 +260,12 @@
     const dt = Math.min(now - lastTime, 32);
     lastTime = now;
 
-    // 1) 纯黑背景
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
-    // 2) 水流尾迹
-    drawWater(now);
+    drawSmoke(now, dt);
 
-    // 3) 草丛（原有逻辑，完全未改）
+    // 草丛（原有逻辑，完全未改）
     const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
 
     for (const b of blades) {
