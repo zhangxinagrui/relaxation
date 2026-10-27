@@ -37,47 +37,102 @@
 
   let W = 0, H = 0, dpr = 1;
 
-  // ---------- 配置 ----------
-  const BLADE_COUNT_BASE = 380;      // 基准数量，更密
-  const BLADE_MIN_HEIGHT = 0.06;     // 更矮
+  // ---------- 草配置（保持不变） ----------
+  const BLADE_COUNT_BASE = 380;
+  const BLADE_MIN_HEIGHT = 0.06;
   const BLADE_MAX_HEIGHT = 0.18;
-  const BLADE_WIDTH_MIN = 2.0;       // 根部宽度，更粗
+  const BLADE_WIDTH_MIN = 2.0;
   const BLADE_WIDTH_MAX = 4.5;
-  const SWAY_AMPLITUDE = 7;          // 自然摇曳幅度
+  const SWAY_AMPLITUDE = 7;
   const SWAY_SPEED = 0.00055;
-  const MOUSE_RADIUS = 130;          // 鼠标影响半径
-  const MOUSE_PUSH = 75;             // 最大推开距离
-  const SPRING = 0.025;              // 弹簧刚度，越小恢复越慢
-  const DAMPING = 0.91;              // 阻尼，越接近 1 回弹越慢越柔
-  const WIND_DRIFT = 0.15;           // 全局微风漂移
+  const MOUSE_RADIUS = 130;
+  const MOUSE_PUSH = 75;
+  const SPRING = 0.025;
+  const DAMPING = 0.91;
+  const WIND_DRIFT = 0.15;
+
+  // ---------- 涟漪配置（改为纯白 + 通透层次） ----------
+  const RIPPLE_LIFE = 1900;          // 生命周期
+  const RIPPLE_START_RADIUS = 2;
+  const RIPPLE_MAX_RADIUS_MIN = 55;
+  const RIPPLE_MAX_RADIUS_MAX = 120;
+  const RIPPLE_SPAWN_DIST = 14;
+  const RIPPLE_SPAWN_INTERVAL = 26;
 
   // ---------- 鼠标 ----------
   const mouse = { x: -9999, y: -9999, active: false };
+
+  // ---------- 涟漪数据 ----------
+  const ripples = [];
+  let lastRippleX = -9999;
+  let lastRippleY = -9999;
+  let lastRippleTime = 0;
+
+  function spawnRipple(x, y, now) {
+    ripples.push({
+      x, y,
+      birth: now,
+      life: RIPPLE_LIFE,
+      maxRadius: RIPPLE_MAX_RADIUS_MIN +
+                 Math.random() * (RIPPLE_MAX_RADIUS_MAX - RIPPLE_MAX_RADIUS_MIN),
+      startRadius: RIPPLE_START_RADIUS,
+      // 每个涟漪的初始旋转角，让波纹不完全是标准同心圆，略有手工感
+      angleOffset: Math.random() * Math.PI * 2
+    });
+  }
+
   window.addEventListener('mousemove', (e) => {
     mouse.x = e.clientX;
     mouse.y = e.clientY;
     mouse.active = true;
+
+    const now = performance.now();
+    const dx = e.clientX - lastRippleX;
+    const dy = e.clientY - lastRippleY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > RIPPLE_SPAWN_DIST && now - lastRippleTime > RIPPLE_SPAWN_INTERVAL) {
+      spawnRipple(e.clientX, e.clientY, now);
+      lastRippleX = e.clientX;
+      lastRippleY = e.clientY;
+      lastRippleTime = now;
+    }
   });
+
   window.addEventListener('mouseleave', () => {
     mouse.active = false;
     mouse.x = -9999;
     mouse.y = -9999;
   });
+
   window.addEventListener('touchmove', (e) => {
     const t = e.touches[0];
     if (t) {
       mouse.x = t.clientX;
       mouse.y = t.clientY;
       mouse.active = true;
+
+      const now = performance.now();
+      const dx = t.clientX - lastRippleX;
+      const dy = t.clientY - lastRippleY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > RIPPLE_SPAWN_DIST && now - lastRippleTime > RIPPLE_SPAWN_INTERVAL) {
+        spawnRipple(t.clientX, t.clientY, now);
+        lastRippleX = t.clientX;
+        lastRippleY = t.clientY;
+        lastRippleTime = now;
+      }
     }
   }, { passive: true });
+
   window.addEventListener('touchend', () => {
     mouse.active = false;
     mouse.x = -9999;
     mouse.y = -9999;
   });
 
-  // ---------- 草叶 ----------
+  // ---------- 草叶（保持不变） ----------
   const blades = [];
 
   function randomBetween(a, b) {
@@ -86,7 +141,6 @@
 
   function buildBlades() {
     blades.length = 0;
-
     const count = Math.floor(BLADE_COUNT_BASE * Math.max(0.6, W / 1400));
 
     for (let i = 0; i < count; i++) {
@@ -96,13 +150,13 @@
 
       blades.push({
         baseX,
-        baseY: H + 6,                                // 根部略低出屏幕
+        baseY: H + 6,
         height,
         baseWidth: randomBetween(BLADE_WIDTH_MIN, BLADE_WIDTH_MAX),
-        bend: randomBetween(-14, 14),                // 静态自然弯向
+        bend: randomBetween(-14, 14),
         phase: Math.random() * Math.PI * 2,
         speedJitter: randomBetween(0.6, 1.4),
-        alpha: randomBetween(0.22, 0.44),            // 每根草透明度错落
+        alpha: randomBetween(0.22, 0.44),
         offset: 0,
         velocity: 0,
         targetOffset: 0
@@ -128,6 +182,62 @@
   resize();
   window.addEventListener('resize', resize);
 
+  // ---------- 涟漪绘制：纯白 + 三层通透圆环 ----------
+  function drawRipples(now) {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      const t = (now - r.birth) / r.life;
+      if (t >= 1) {
+        ripples.splice(i, 1);
+        continue;
+      }
+
+      // 半径扩散：先快后慢
+      const ease = 1 - Math.pow(1 - t, 2.2);
+      const radius = r.startRadius + (r.maxRadius - r.startRadius) * ease;
+
+      // 主环透明度：二次衰减
+      const fade = (1 - t) * (1 - t);
+
+      // ---- 第一层：外环，最亮、最清晰 ----
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.5 * fade) + ')';
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+
+      // ---- 第二层：中环，略微滞后，透明度更低 ----
+      const midT = Math.max(0, t - 0.09);
+      if (midT < 1) {
+        const midEase = 1 - Math.pow(1 - midT, 2.2);
+        const midR = r.startRadius + (r.maxRadius * 0.68 - r.startRadius) * midEase;
+        const midFade = (1 - midT) * (1 - midT);
+        if (midR > 0.5) {
+          ctx.beginPath();
+          ctx.arc(r.x, r.y, midR, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.28 * midFade) + ')';
+          ctx.lineWidth = 0.9;
+          ctx.stroke();
+        }
+      }
+
+      // ---- 第三层：内环，最淡最细，营造水波的柔润感 ----
+      const inT = Math.max(0, t - 0.18);
+      if (inT < 1) {
+        const inEase = 1 - Math.pow(1 - inT, 2.2);
+        const inR = r.startRadius + (r.maxRadius * 0.42 - r.startRadius) * inEase;
+        const inFade = (1 - inT) * (1 - inT);
+        if (inR > 0.5) {
+          ctx.beginPath();
+          ctx.arc(r.x, r.y, inR, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 255, ' + (0.15 * inFade) + ')';
+          ctx.lineWidth = 0.7;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
   // ---------- 主循环 ----------
   let lastTime = performance.now();
 
@@ -135,17 +245,20 @@
     const dt = Math.min(now - lastTime, 32);
     lastTime = now;
 
+    // 1) 纯黑背景
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
+    // 2) 白色涟漪
+    drawRipples(now);
+
+    // 3) 草丛（原有逻辑，完全未改）
     const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
 
     for (const b of blades) {
-      // 自然摇曳
       const sway =
         Math.sin(now * SWAY_SPEED * b.speedJitter + b.phase) * SWAY_AMPLITUDE;
 
-      // 鼠标拨开
       let push = 0;
       if (mouse.active) {
         const tipX = b.baseX + sway + globalSway + b.bend;
@@ -164,13 +277,11 @@
 
       b.targetOffset = push;
 
-      // 弹簧 + 阻尼：慢速平滑恢复
       const force = (b.targetOffset - b.offset) * SPRING;
       b.velocity += force;
       b.velocity *= DAMPING;
       b.offset += b.velocity;
 
-      // ---------- 绘制：下粗上尖的填充草叶 ----------
       const tipX = b.baseX + sway + globalSway + b.bend + b.offset;
       const tipY = b.baseY - b.height;
 
@@ -178,7 +289,6 @@
       const leftBaseX = b.baseX - halfW;
       const rightBaseX = b.baseX + halfW;
 
-      // 控制点放在 55% 高度处，左右略向外鼓，形成底部稍粗的弧度
       const ctrlY = b.baseY - b.height * 0.55;
       const leftCtrlX = leftBaseX + (tipX - leftBaseX) * 0.35 - halfW * 0.9;
       const rightCtrlX = rightBaseX + (tipX - rightBaseX) * 0.35 + halfW * 0.9;
