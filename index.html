@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Relaxation · 草</title>
+  <title>Relaxation</title>
   <style>
     * {
       box-sizing: border-box;
@@ -80,7 +80,13 @@
     fireflyUpDamp: 0.45,
     fireflyTurnEase: 0.025,
     fireflyDrift: 0.03,
-    fireflyGrassRatio: 0.45
+    fireflyGrassRatio: 0.45,
+
+    // 流星（新增）
+    meteorIntervalMin: 1200,
+    meteorIntervalMax: 3500,
+    meteorBurstMin: 1,
+    meteorBurstMax: 4
   };
 
   const AUTO = /[?&]auto\b/.test(location.search);
@@ -127,7 +133,6 @@
   const smoke = [];
   let lastX = -9999, lastY = -9999;
 
-  // 平滑的“装载压力”：0 = 轻载，1 = 满载
   let overflowPressure = 0;
 
   const SPRITE_SIZE = 128;
@@ -149,8 +154,6 @@
   })();
 
   function spawnSmoke(x, y) {
-    // 关键：这里绝不删除任何粒子。
-    // 只在极端情况（正常操作不会达到）拒绝生成，避免内存无限膨胀。
     if (smoke.length >= CFG.maxSmoke * 3) return;
 
     const now = performance.now();
@@ -183,6 +186,182 @@
       }
     }
     lastX = x; lastY = y;
+  }
+
+  // ---------------------------------------------------------------- 流星（新增）
+  const meteors = [];
+  let meteorTimer = 0;
+  let meteorInterval = CFG.meteorIntervalMin +
+    Math.random() * (CFG.meteorIntervalMax - CFG.meteorIntervalMin);
+
+  function spawnMeteorBurst() {
+    const count = CFG.meteorBurstMin +
+      Math.floor(Math.random() * (CFG.meteorBurstMax - CFG.meteorBurstMin + 1));
+
+    const baseAngle = Math.PI * (0.18 + Math.random() * 0.09);
+    const baseX = -80 + Math.random() * (W * 0.55 + 80);
+    const baseY = -80 - Math.random() * 80;
+    const spreadTime = count > 1 ? 180 : 0;
+
+    for (let i = 0; i < count; i++) {
+      const offX = (Math.random() - 0.5) * 360;
+      const offY = (Math.random() - 0.5) * 200;
+      const angle = baseAngle + (Math.random() - 0.5) * (Math.PI * 10 / 180);
+      const speed = 500 + Math.random() * 450;
+
+      const delay = count > 1
+        ? i * spreadTime + Math.random() * 80
+        : 0;
+
+      meteors.push({
+        x: baseX + offX,
+        y: baseY + offY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        tailLen: 110 + Math.random() * 130,
+        width: 1.1 + Math.random() * 0.9,
+        life: 0.85 + Math.random() * 0.6,
+        age: 0,
+        delay: delay / 1000
+      });
+    }
+  }
+
+  function updateMeteors(dt) {
+    meteorTimer += dt * 1000;
+    if (meteorTimer >= meteorInterval) {
+      meteorTimer = 0;
+      meteorInterval = CFG.meteorIntervalMin +
+        Math.random() * (CFG.meteorIntervalMax - CFG.meteorIntervalMin);
+      spawnMeteorBurst();
+    }
+
+    for (let i = meteors.length - 1; i >= 0; i--) {
+      const m = meteors[i];
+
+      if (m.delay > 0) {
+        m.delay -= dt;
+        if (m.delay > 0) continue;
+        m.delay = 0;
+      }
+
+      m.age += dt;
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+
+      if (m.age >= m.life || m.y > H + 60 || m.x < -150 || m.x > W + 150) {
+        meteors.splice(i, 1);
+      }
+    }
+  }
+
+  function drawMeteors() {
+    for (let i = 0; i < meteors.length; i++) {
+      const m = meteors[i];
+      if (m.delay > 0) continue;
+
+      const t = m.age / m.life;
+
+      let alpha = 1;
+      if (t < 0.08) alpha = t / 0.08;
+      else if (t > 0.82) alpha = (1 - t) / 0.18;
+      if (alpha <= 0) continue;
+
+      const sp = Math.sqrt(m.vx * m.vx + m.vy * m.vy) || 1;
+      const ux = m.vx / sp;
+      const uy = m.vy / sp;
+
+      const tailX = m.x - ux * m.tailLen;
+      const tailY = m.y - uy * m.tailLen;
+
+      // 1) 最外层光晕
+      {
+        const g = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
+        g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 0.10) + ')');
+        g.addColorStop(0.35, 'rgba(255,255,255,' + (alpha * 0.05) + ')');
+        g.addColorStop(0.7, 'rgba(255,255,255,' + (alpha * 0.015) + ')');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.strokeStyle = g;
+        ctx.lineWidth = m.width * 4.0;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y);
+        ctx.lineTo(tailX, tailY);
+        ctx.stroke();
+      }
+
+      // 2) 中层
+      {
+        const g = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
+        g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 0.38) + ')');
+        g.addColorStop(0.35, 'rgba(255,255,255,' + (alpha * 0.18) + ')');
+        g.addColorStop(0.75, 'rgba(255,255,255,' + (alpha * 0.05) + ')');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.strokeStyle = g;
+        ctx.lineWidth = m.width * 1.9;
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y);
+        ctx.lineTo(tailX, tailY);
+        ctx.stroke();
+      }
+
+      // 3) 细亮核心
+      {
+        const g = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
+        g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 1.0) + ')');
+        g.addColorStop(0.25, 'rgba(255,255,255,' + (alpha * 0.85) + ')');
+        g.addColorStop(0.6, 'rgba(255,255,255,' + (alpha * 0.35) + ')');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.strokeStyle = g;
+        ctx.lineWidth = m.width * 0.85;
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y);
+        ctx.lineTo(tailX, tailY);
+        ctx.stroke();
+      }
+
+      // 头部大光晕
+      {
+        const r = m.width * 9;
+        const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, r);
+        g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 0.22) + ')');
+        g.addColorStop(0.35, 'rgba(255,255,255,' + (alpha * 0.10) + ')');
+        g.addColorStop(0.7, 'rgba(255,255,255,' + (alpha * 0.03) + ')');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 头部中等光晕
+      {
+        const r = m.width * 4.5;
+        const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, r);
+        g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 0.55) + ')');
+        g.addColorStop(0.4, 'rgba(255,255,255,' + (alpha * 0.22) + ')');
+        g.addColorStop(0.8, 'rgba(255,255,255,' + (alpha * 0.04) + ')');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 头部亮核
+      {
+        const r = m.width * 1.8;
+        const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, r);
+        g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 1.0) + ')');
+        g.addColorStop(0.5, 'rgba(255,255,255,' + (alpha * 0.55) + ')');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.lineCap = 'butt';
   }
 
   // ---------------------------------------------------------------- 萤火虫
@@ -600,6 +779,7 @@
 
     stepBlades(dt);
     stepFireflies(dt);
+    updateMeteors(dt);   // 新增
 
     const targetPower = pointer.active ? 1 : 0;
     const ease = targetPower > pointerPower ? 0.045 : 0.015;
@@ -626,7 +806,6 @@
   function drawSmoke(now) {
     smokeTick++;
 
-    // 装载率驱动的压力：50% 装载率开始有压力，100% 时压力 = 1
     const load = smoke.length / CFG.maxSmoke;
     const targetPressure = Math.max(0, Math.min(1, (load - 0.5) / 0.5));
     const pEase = targetPressure > overflowPressure ? 0.15 : 0.05;
@@ -643,16 +822,10 @@
 
       for (let i = total - 1; i >= 0; i--) {
         const p = smoke[i];
-
-        // i 越小越老（push 到末尾）。ageRank: 0 = 最老，1 = 最新。
         const ageRank = total > 1 ? i / (total - 1) : 0;
-
-        // 加速倍率：压力最大时，最老粒子 4 倍速消失，最新粒子不受影响
         const boost = 1 + overflowPressure * 3 * (1 - ageRank);
-
         const age = ((now - p.birth) / p.life) * boost;
         if (age >= 1) {
-          // 走到这里时 alpha 已经接近 0，视觉上看不出“删除”
           smoke.splice(i, 1);
           continue;
         }
@@ -760,6 +933,7 @@
     }
 
     drawSmoke(now);
+    drawMeteors();       // 新增
     drawFireflies(now);
     drawBlades();
 
