@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Relaxation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Relaxation · 草</title>
   <style>
     * {
       box-sizing: border-box;
@@ -11,12 +11,16 @@
       padding: 0;
     }
 
+    html, body {
+      height: 100%;
+    }
+
     body {
       background: #000000;
       overflow: hidden;
-      height: 100vh;
-      width: 100vw;
       cursor: crosshair;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
     }
 
     canvas {
@@ -32,56 +36,107 @@
 
 <script>
 (function () {
+  'use strict';
+
   const canvas = document.getElementById('grass-canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // ---------------------------------------------------------------- 参数
+  const CFG = {
+    density: 0.5,
+    minBlades: 500,
+    maxBlades: 950,
+    minHeight: 0.028,
+    maxHeight: 0.27,
+    widthMin: 3.0,
+    widthMax: 6.5,
+    tuftChance: 0.3,
+
+    dt: 1 / 60,
+    gravity: 260,
+    airDrag: 0.996,
+    dragQuad: 0.16,
+    iterations: 4,
+    angleBase: 0.025,
+    bendBase: 0.92,
+    bendTip: 0.07,
+    maxSpeed: 1600,
+
+    windAcc: 5500,
+
+    mouseRadius: 260,
+    mouseWind: 13500,
+    mouseStep: 0.45,
+
+    smokeLifeMin: 1300,
+    smokeLifeMax: 2300,
+    smokeStep: 1.5,
+    maxStepsPerMove: 240,
+    maxSmoke: 1500,
+
+    fireflyCount: 26,
+    fireflyAttractRadius: 300,
+    fireflyAttractProb: 0.06,
+    fireflyUpDamp: 0.45,
+    fireflyTurnEase: 0.025,
+    fireflyDrift: 0.03,
+    fireflyGrassRatio: 0.45
+  };
+
+  const AUTO = /[?&]auto\b/.test(location.search);
 
   let W = 0, H = 0, dpr = 1;
 
-  // ---------- 草配置（更软） ----------
-  const BLADE_COUNT_BASE = 380;
-  const BLADE_MIN_HEIGHT = 0.06;
-  const BLADE_MAX_HEIGHT = 0.18;
-  const BLADE_WIDTH_MIN = 2.0;
-  const BLADE_WIDTH_MAX = 4.5;
-  const SWAY_AMPLITUDE = 9;          // 摇曳幅度略增
-  const SWAY_SPEED = 0.00055;
-  const MOUSE_RADIUS = 130;
-  const MOUSE_PUSH = 75;
-  const SPRING = 0.025;
-  const DAMPING = 0.91;
-  const WIND_DRIFT = 0.15;
+  // ---------------------------------------------------------------- 指针
+  const pointer = { x: -9999, y: -9999, vx: 0, vy: 0, active: false };
+  let lastMoveTime = 0;
 
-  // ---------- 烟雾配置 ----------
-  const SMOKE_LIFE_MIN = 900;
-  const SMOKE_LIFE_MAX = 1700;
-  const SMOKE_STEP = 2;
-  const MAX_STEPS_PER_MOVE = 240;
-  const MAX_SMOKE = 2200;
+  let pointerPower = 0;
+  let smoothSpeed = 0;
+  let windLevel = 0;
 
-  // ---------- 萤火虫配置 ----------
-  const FIREFLY_COUNT = 26;
-  const FIREFLY_ATTRACT_RADIUS = 300;
-  const FIREFLY_ATTRACT_PROB = 0.06;
-  const FIREFLY_UP_DAMP = 0.45;
-  const FIREFLY_TURN_EASE = 0.025;
-  const FIREFLY_DRIFT = 0.03;
-  const FIREFLY_GRASS_SPAWN_RATIO = 0.45;
+  function setPointer(x, y) {
+    const now = performance.now();
+    const dtm = Math.max(8, Math.min(90, now - lastMoveTime));
+    lastMoveTime = now;
 
-  // ---------- 鼠标 ----------
-  const mouse = { x: -9999, y: -9999, active: false };
+    if (pointer.x > -9000) {
+      let vx = ((x - pointer.x) / dtm) * 1000;
+      let vy = ((y - pointer.y) / dtm) * 1000;
+      const sp = Math.sqrt(vx * vx + vy * vy);
+      if (sp > 2600) { vx *= 2600 / sp; vy *= 2600 / sp; }
+      pointer.vx = vx;
+      pointer.vy = vy;
+    }
+    pointer.x = x;
+    pointer.y = y;
+    pointer.active = true;
+  }
 
-  // ---------- 烟雾 ----------
+  function releasePointer() {
+    pointer.active = false;
+    pointer.vx = 0;
+    pointer.vy = 0;
+    pointer.x = -9999;
+    pointer.y = -9999;
+    lastX = -9999;
+    lastY = -9999;
+  }
+
+  // ---------------------------------------------------------------- 烟雾
   const smoke = [];
-  let lastX = -9999;
-  let lastY = -9999;
+  let lastX = -9999, lastY = -9999;
+
+  // 平滑的“装载压力”：0 = 轻载，1 = 满载
+  let overflowPressure = 0;
 
   const SPRITE_SIZE = 128;
   const smokeSprite = document.createElement('canvas');
   smokeSprite.width = SPRITE_SIZE;
   smokeSprite.height = SPRITE_SIZE;
-  (function makeSprite() {
-    const sctx = smokeSprite.getContext('2d');
-    const g = sctx.createRadialGradient(
+  (function makeSmokeSprite() {
+    const c = smokeSprite.getContext('2d');
+    const g = c.createRadialGradient(
       SPRITE_SIZE / 2, SPRITE_SIZE / 2, 0,
       SPRITE_SIZE / 2, SPRITE_SIZE / 2, SPRITE_SIZE / 2
     );
@@ -89,86 +144,49 @@
     g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
     g.addColorStop(0.7, 'rgba(255,255,255,0.16)');
     g.addColorStop(1, 'rgba(255,255,255,0)');
-    sctx.fillStyle = g;
-    sctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
+    c.fillStyle = g;
+    c.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
   })();
 
   function spawnSmoke(x, y) {
-    if (smoke.length >= MAX_SMOKE) return;
+    // 关键：这里绝不删除任何粒子。
+    // 只在极端情况（正常操作不会达到）拒绝生成，避免内存无限膨胀。
+    if (smoke.length >= CFG.maxSmoke * 3) return;
 
     const now = performance.now();
     const spread = 7;
-    const ox = (Math.random() - 0.5) * spread;
-    const oy = (Math.random() - 0.5) * spread;
 
     smoke.push({
-      x: x + ox,
-      y: y + oy,
+      x: x + (Math.random() - 0.5) * spread,
+      y: y + (Math.random() - 0.5) * spread,
       r0: 6 + Math.random() * 9,
       r1: 24 + Math.random() * 26,
-      life: SMOKE_LIFE_MIN + Math.random() * (SMOKE_LIFE_MAX - SMOKE_LIFE_MIN),
+      life: CFG.smokeLifeMin + Math.random() * (CFG.smokeLifeMax - CFG.smokeLifeMin),
       birth: now,
-      alpha: 0.06 + Math.random() * 0.06
+      alpha: 0.09 + Math.random() * 0.08
     });
   }
 
-  function handleMove(x, y) {
-    mouse.x = x;
-    mouse.y = y;
-    mouse.active = true;
-
+  function trailTo(x, y) {
     if (lastX < -9000) {
-      lastX = x;
-      lastY = y;
+      lastX = x; lastY = y;
       return;
     }
-
     const dx = x - lastX;
     const dy = y - lastY;
     const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist > 0.5) {
-      const steps = Math.min(
-        MAX_STEPS_PER_MOVE,
-        Math.max(1, Math.ceil(dist / SMOKE_STEP))
-      );
-
+    if (dist > 0.5 && dist < 1500) {
+      const steps = Math.min(CFG.maxStepsPerMove, Math.max(1, Math.ceil(dist / CFG.smokeStep)));
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
         spawnSmoke(lastX + dx * t, lastY + dy * t);
       }
     }
-
-    lastX = x;
-    lastY = y;
+    lastX = x; lastY = y;
   }
 
-  window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
-
-  window.addEventListener('mouseleave', () => {
-    mouse.active = false;
-    mouse.x = -9999;
-    mouse.y = -9999;
-    lastX = -9999;
-    lastY = -9999;
-  });
-
-  window.addEventListener('touchmove', (e) => {
-    const t = e.touches[0];
-    if (t) handleMove(t.clientX, t.clientY);
-  }, { passive: true });
-
-  window.addEventListener('touchend', () => {
-    mouse.active = false;
-    mouse.x = -9999;
-    mouse.y = -9999;
-    lastX = -9999;
-    lastY = -9999;
-  });
-
-  // ---------- 萤火虫 ----------
+  // ---------------------------------------------------------------- 萤火虫
   const fireflies = [];
-
   const FF_SPRITE_SIZE = 64;
   const fireflySprite = document.createElement('canvas');
   fireflySprite.width = FF_SPRITE_SIZE;
@@ -186,16 +204,14 @@
 
   function buildFireflies() {
     fireflies.length = 0;
-    for (let i = 0; i < FIREFLY_COUNT; i++) {
+    for (let i = 0; i < CFG.fireflyCount; i++) {
       const angle = Math.random() * Math.PI * 2;
-
       let y;
-      if (Math.random() < FIREFLY_GRASS_SPAWN_RATIO) {
+      if (Math.random() < CFG.fireflyGrassRatio) {
         y = H * (0.78 + Math.random() * 0.19);
       } else {
         y = H * (0.05 + Math.random() * 0.73);
       }
-
       fireflies.push({
         x: Math.random() * W,
         y,
@@ -216,31 +232,28 @@
     return current + diff * t;
   }
 
-  function updateFireflies(now, dt) {
-    const dtf = Math.min(dt / 16, 2);
+  function stepFireflies(dt) {
+    const dtf = Math.min(dt * 60, 2);
 
-    for (const f of fireflies) {
+    for (let i = 0; i < fireflies.length; i++) {
+      const f = fireflies[i];
       const heightRatio = Math.min(1, Math.max(0, (H - f.y) / H));
-      const upFactor = 1 - heightRatio * FIREFLY_UP_DAMP;
+      const upFactor = 1 - heightRatio * CFG.fireflyUpDamp;
 
-      let drift = (Math.random() - 0.5) * FIREFLY_DRIFT * dtf;
+      let drift = (Math.random() - 0.5) * CFG.fireflyDrift * dtf;
       const nextTarget = f.targetAngle + drift;
       const wouldGoUp = Math.sin(nextTarget) < 0;
-      if (wouldGoUp && Math.random() > upFactor) {
-        drift = 0;
-      }
+      if (wouldGoUp && Math.random() > upFactor) drift = 0;
       f.targetAngle += drift;
 
-      if (mouse.active) {
-        const dx = mouse.x - f.x;
-        const dy = mouse.y - f.y;
-        const distSq = dx * dx + dy * dy;
-        const R = FIREFLY_ATTRACT_RADIUS;
-
-        if (distSq < R * R && distSq > 4) {
-          const dist = Math.sqrt(distSq);
-          const prob = (1 - dist / R) * FIREFLY_ATTRACT_PROB * dtf;
-
+      if (pointer.active) {
+        const dx = pointer.x - f.x;
+        const dy = pointer.y - f.y;
+        const d2 = dx * dx + dy * dy;
+        const R = CFG.fireflyAttractRadius;
+        if (d2 < R * R && d2 > 4) {
+          const d = Math.sqrt(d2);
+          const prob = (1 - d / R) * CFG.fireflyAttractProb * dtf;
           if (Math.random() < prob) {
             f.targetAngle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 1.0;
           }
@@ -254,65 +267,511 @@
         f.y = Math.max(margin, Math.min(H - margin, f.y));
       }
 
-      f.wanderAngle = angleLerp(f.wanderAngle, f.targetAngle, FIREFLY_TURN_EASE * dtf);
-
+      f.wanderAngle = angleLerp(f.wanderAngle, f.targetAngle, CFG.fireflyTurnEase * dtf);
       f.x += Math.cos(f.wanderAngle) * f.speed * dtf;
       f.y += Math.sin(f.wanderAngle) * f.speed * dtf;
     }
   }
 
   function drawFireflies(now) {
-    for (const f of fireflies) {
+    for (let i = 0; i < fireflies.length; i++) {
+      const f = fireflies[i];
       const blink = 0.25 + 0.75 * (Math.sin(now * f.blinkSpeed + f.phase) * 0.5 + 0.5);
-      const glowSize = f.size * 10;
-
-      ctx.globalAlpha = blink * 0.8;
-      ctx.drawImage(
-        fireflySprite,
-        f.x - glowSize / 2,
-        f.y - glowSize / 2,
-        glowSize,
-        glowSize
-      );
+      const glowSize = f.size * 9;
+      ctx.globalAlpha = blink * 0.75;
+      ctx.drawImage(fireflySprite, f.x - glowSize / 2, f.y - glowSize / 2, glowSize, glowSize);
     }
     ctx.globalAlpha = 1;
   }
 
-  // ---------- 草叶 ----------
-  const blades = [];
+  // ---------------------------------------------------------------- 草场
+  const field = { blades: [], time: 0 };
+  let fogGrad = null;
+  let baseGrad = null;
 
-  function randomBetween(a, b) {
-    return a + Math.random() * (b - a);
+  function gauss() {
+    return (Math.random() + Math.random() + Math.random() - 1.5) * 0.9;
   }
 
-  function buildBlades() {
-    blades.length = 0;
-    const count = Math.floor(BLADE_COUNT_BASE * Math.max(0.6, W / 1400));
+  function buildField() {
+    const blades = [];
+    const target = Math.round(Math.min(CFG.maxBlades, Math.max(CFG.minBlades, W * CFG.density)));
 
-    for (let i = 0; i < count; i++) {
-      const baseX = Math.random() * W;
-      const heightRatio = randomBetween(BLADE_MIN_HEIGHT, BLADE_MAX_HEIGHT);
-      const height = H * heightRatio;
-
-      blades.push({
-        baseX,
-        baseY: H + 6,
-        height,
-        baseWidth: randomBetween(BLADE_WIDTH_MIN, BLADE_WIDTH_MAX),
-        bend: randomBetween(-22, 22),               // 静态弯曲更大
-        phase: Math.random() * Math.PI * 2,
-        speedJitter: randomBetween(0.6, 1.4),
-        alpha: randomBetween(0.18, 0.38),           // 不透明度稍收
-        offset: 0,
-        velocity: 0,
-        targetOffset: 0
+    const tuftCount = Math.max(6, Math.round(W / 150));
+    const tufts = [];
+    for (let i = 0; i < tuftCount; i++) {
+      tufts.push({
+        x: Math.random() * W,
+        spread: 40 + Math.random() * 70,
+        hs: 0.72 + Math.random() * 0.5
       });
+    }
+
+    const groundY = H + 10;
+    const span = W + 80;
+
+    for (let k = 0; k < target; k++) {
+      const inTuft = Math.random() < CFG.tuftChance;
+      let bx, hs = 1, tuftX = 0;
+
+      if (inTuft) {
+        const tf = tufts[(Math.random() * tufts.length) | 0];
+        bx = tf.x + gauss() * tf.spread;
+        hs = tf.hs;
+        tuftX = tf.x;
+      } else {
+        bx = ((k + 0.2 + Math.random() * 0.6) / target) * span - 40;
+      }
+      if (bx < -40 || bx > W + 40) continue;
+
+      let hr = (CFG.minHeight + (CFG.maxHeight - CFG.minHeight) * Math.pow(Math.random(), 1.7)) * hs;
+      hr = Math.max(0.024, Math.min(0.28, hr));
+      const h = H * hr;
+
+      const seg = Math.max(3, Math.min(8, Math.round(h / 16)));
+      const L = h / seg;
+
+      let lean = (Math.random() - 0.5) * 0.34;
+      if (inTuft) lean += Math.max(-1, Math.min(1, (bx - tuftX) / 40)) * 0.22;
+      const droop = Math.random() < 0.3
+        ? (0.45 + Math.random() * 0.5) * (Math.random() < 0.5 ? -1 : 1)
+        : 0;
+      const curl = (Math.random() - 0.5) * 0.75 + droop;
+
+      const nodes = new Array(seg + 1);
+      const relCos = new Float32Array(seg + 1);
+      const relSin = new Float32Array(seg + 1);
+      const bendK = new Float32Array(seg + 1);
+      const wf = new Float32Array(seg + 1);
+      const exposure = new Float32Array(seg + 1);
+      const stiff = 0.8 + Math.random() * 0.45;
+
+      let x = bx, y = groundY;
+      let a = -Math.PI / 2 + lean;
+      let prevA = a;
+
+      for (let i = 0; i <= seg; i++) {
+        const t = i / seg;
+        if (i < seg) {
+          a = -Math.PI / 2 + lean + curl * t * t;
+          if (i > 0) {
+            const rel = a - prevA;
+            relCos[i] = Math.cos(rel);
+            relSin[i] = Math.sin(rel);
+          }
+          prevA = a;
+          wf[i] = Math.pow(1 - t, 0.3);
+          exposure[i] = 0.22 + 0.78 * t * t;
+          const softT = t < 0.55 ? 0 : (t - 0.55) / 0.45;
+          const soft = softT * softT * (3 - 2 * softT);
+          bendK[i] = (CFG.bendBase * (1 - soft) + CFG.bendTip * soft) * stiff;
+        } else {
+          wf[i] = 0;
+          exposure[i] = 1;
+          bendK[i] = 0;
+        }
+        nodes[i] = { x, y, px: x, py: y };
+        if (i < seg) {
+          x += Math.cos(a) * L;
+          y += Math.sin(a) * L;
+        }
+      }
+
+      const depth = h / (H * CFG.maxHeight);
+      const alpha = 0.07 + depth * 0.25 + Math.random() * 0.04;
+
+      const blade = {
+        nodes,
+        seg,
+        L,
+        baseCos: Math.cos(-Math.PI / 2 + lean),
+        baseSin: Math.sin(-Math.PI / 2 + lean),
+        baseK: CFG.angleBase * stiff,
+        relCos,
+        relSin,
+        bendK,
+        wf,
+        exposure,
+        baseW: (CFG.widthMin + Math.random() * (CFG.widthMax - CFG.widthMin)) * (0.72 + depth * 0.45),
+        fill: 'rgba(255,255,255,' + alpha.toFixed(3) + ')',
+        seed: Math.random(),
+        baseX: bx,
+        left: new Array(seg + 1),
+        right: new Array(seg + 1),
+        windX: 0,
+        windY: 0,
+        pwX: 0,
+        pwY: 0
+      };
+
+      for (let i = 0; i <= seg; i++) {
+        blade.left[i] = { x: 0, y: 0 };
+        blade.right[i] = { x: 0, y: 0 };
+      }
+
+      blades.push(blade);
+    }
+
+    blades.sort((p, q) => (p.seg * p.L) - (q.seg * q.L));
+
+    field.blades = blades;
+    field.time = 0;
+  }
+
+  function buildFog() {
+    fogGrad = ctx.createLinearGradient(0, H * 0.55, 0, H);
+    fogGrad.addColorStop(0, 'rgba(255,255,255,0)');
+    fogGrad.addColorStop(0.7, 'rgba(255,255,255,0.012)');
+    fogGrad.addColorStop(1, 'rgba(255,255,255,0.045)');
+
+    baseGrad = ctx.createLinearGradient(0, H - 60, 0, H);
+    baseGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    baseGrad.addColorStop(0.6, 'rgba(0,0,0,0.16)');
+    baseGrad.addColorStop(1, 'rgba(0,0,0,0.55)');
+  }
+
+  // ---------------------------------------------------------------- 物理
+  function windAt(b, t) {
+    const x = b.baseX;
+    const wave1 = Math.sin(t * 0.55 - x * 0.0022);
+    const wave2 = Math.sin(t * 1.45 - x * 0.0037 + 1.3);
+    const w = 0.62 + 0.34 * wave1 + 0.12 * wave2;
+    const wx = w * CFG.windAcc * (0.94 + b.seed * 0.12) * windLevel;
+    b.windX = wx;
+    b.windY = wx * 0.06;
+  }
+
+  function stepBlades(dt) {
+    const dt2 = dt * dt;
+    const blades = field.blades;
+    const t = field.time;
+    const mr = CFG.mouseRadius;
+    const mr2 = mr * mr;
+    const pActive = pointer.active;
+    const px = pointer.x, py = pointer.y;
+    const pvx = pointer.vx, pvy = pointer.vy;
+    smoothSpeed += (Math.sqrt(pvx * pvx + pvy * pvy) - smoothSpeed) * 0.08;
+    const pSpeed = smoothSpeed;
+    const maxSp = CFG.maxSpeed / 60;
+
+    for (let bi = 0; bi < blades.length; bi++) {
+      const b = blades[bi];
+      const nodes = b.nodes;
+      const seg = b.seg;
+
+      windAt(b, t);
+
+      let pfx = 0, pfy = 0;
+      if (pActive) {
+        const mid = nodes[seg > 1 ? (seg >> 1) : 1];
+        const srcY = py < H ? py : H;
+        const dx = mid.x - px;
+        const dyReal = mid.y - srcY;
+        const d2 = dx * dx + dyReal * dyReal;
+        if (d2 < mr2 && d2 > 1) {
+          const d = Math.sqrt(d2);
+          const fall = 1 - d / mr;
+          const gust = fall * fall * (0.55 + 0.45 * fall);
+          const drive = 1 + Math.min(0.8, pSpeed / 1800);
+          const w = CFG.mouseWind * gust * drive * pointerPower;
+          const dirY = dyReal * 0.4;
+          const dl = Math.sqrt(dx * dx + dirY * dirY) || 1;
+          pfx = (dx / dl) * w;
+          pfy = (dirY / dl) * w;
+
+          const stepLen = Math.sqrt(pfx * pfx + pfy * pfy) * dt2;
+          const maxStep = b.L * CFG.mouseStep;
+          if (stepLen > 0.0001) {
+            const s = (maxStep * Math.tanh(stepLen / maxStep)) / stepLen;
+            pfx *= s;
+            pfy *= s;
+          }
+        }
+      }
+
+      const curMag = Math.abs(b.pwX) + Math.abs(b.pwY);
+      const newMag = Math.abs(pfx) + Math.abs(pfy);
+      const k = newMag > curMag ? 0.14 : 0.016;
+      b.pwX += (pfx - b.pwX) * k;
+      b.pwY += (pfy - b.pwY) * k;
+      pfx = b.pwX;
+      pfy = b.pwY;
+
+      for (let i = 1; i <= seg; i++) {
+        const n = nodes[i];
+        let ax = b.windX * b.exposure[i] + pfx;
+        let ay = b.windY * b.exposure[i] + CFG.gravity + pfy;
+
+        let vx = (n.x - n.px) * CFG.airDrag;
+        let vy = (n.y - n.py) * CFG.airDrag;
+        const sp = Math.sqrt(vx * vx + vy * vy);
+        if (sp > 0) {
+          const damp = 1 / (1 + CFG.dragQuad * sp);
+          vx *= damp;
+          vy *= damp;
+        }
+        if (sp > maxSp) {
+          const k = maxSp / sp;
+          vx *= k;
+          vy *= k;
+        }
+
+        n.px = n.x;
+        n.py = n.y;
+        n.x += vx + ax * dt2;
+        n.y += vy + ay * dt2;
+      }
+
+      for (let it = 0; it < CFG.iterations; it++) {
+        for (let i = 1; i <= seg; i++) {
+          const a = nodes[i - 1], c = nodes[i];
+          const dx = c.x - a.x, dy = c.y - a.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+          const diff = (d - b.L) / d;
+          if (i === 1) {
+            const mx = -dx * diff, my = -dy * diff;
+            c.x += mx; c.y += my; c.px += mx; c.py += my;
+          } else {
+            const hx = dx * diff * 0.5, hy = dy * diff * 0.5;
+            a.x += hx; a.y += hy; a.px += hx; a.py += hy;
+            c.x -= hx; c.y -= hy; c.px -= hx; c.py -= hy;
+          }
+        }
+
+        for (let i = 1; i <= seg; i++) {
+          const a = nodes[i - 1], c = nodes[i];
+          const dx = c.x - a.x, dy = c.y - a.y;
+          const len = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+          const ux = dx / len, uy = dy / len;
+
+          let rx, ry, k;
+          if (i === 1) {
+            rx = b.baseCos; ry = b.baseSin; k = b.baseK;
+          } else {
+            const p = nodes[i - 2];
+            let px = a.x - p.x, py = a.y - p.y;
+            const pl = Math.sqrt(px * px + py * py) || 0.0001;
+            px /= pl; py /= pl;
+            const cr = b.relCos[i - 1], sr = b.relSin[i - 1];
+            rx = px * cr - py * sr;
+            ry = px * sr + py * cr;
+            k = b.bendK[i - 1];
+          }
+
+          const vx = ux + (rx - ux) * k;
+          const vy = uy + (ry - uy) * k;
+          const vl = Math.sqrt(vx * vx + vy * vy) || 1;
+          c.x = a.x + (vx / vl) * len;
+          c.y = a.y + (vy / vl) * len;
+        }
+      }
+
+      for (let i = 1; i <= seg; i++) {
+        const a = nodes[i - 1], c = nodes[i];
+        const dx = c.x - a.x, dy = c.y - a.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+        const k = b.L / d;
+        const nx2 = a.x + dx * k;
+        const ny2 = a.y + dy * k;
+        c.px += nx2 - c.x;
+        c.py += ny2 - c.y;
+        c.x = nx2;
+        c.y = ny2;
+      }
     }
   }
 
-  // ---------- 尺寸 ----------
+  function simulate(dt) {
+    field.time += dt;
+
+    if (windLevel < 1) windLevel += (1 - windLevel) * 0.02;
+
+    if (AUTO) {
+      const t = field.time;
+      const tx = W * 0.5 + Math.sin(t * 0.5) * W * 0.34;
+      const ty = H * 0.86 + Math.sin(t * 1.13 + 0.6) * H * 0.05;
+      pointer.vx = (tx - pointer.x) * 60;
+      pointer.vy = (ty - pointer.y) * 60;
+      pointer.x = tx;
+      pointer.y = ty;
+      pointer.active = true;
+      if (Math.random() < 0.85) spawnSmoke(tx, ty);
+    }
+
+    stepBlades(dt);
+    stepFireflies(dt);
+
+    const targetPower = pointer.active ? 1 : 0;
+    const ease = targetPower > pointerPower ? 0.045 : 0.015;
+    pointerPower += (targetPower - pointerPower) * ease;
+
+    pointer.vx *= 0.9;
+    pointer.vy *= 0.9;
+  }
+
+  // ---------------------------------------------------------------- 渲染
+  const SMOKE_SCALE = 0.4;
+  const smokeLayer = document.createElement('canvas');
+  const sctx = smokeLayer.getContext('2d');
+  let smokeDrawn = false;
+  let smokeTick = 0;
+  let smokeBX0 = 0, smokeBY0 = 0, smokeBX1 = 0, smokeBY1 = 0;
+
+  function resizeSmokeLayer() {
+    smokeLayer.width = Math.max(1, Math.ceil(W * SMOKE_SCALE));
+    smokeLayer.height = Math.max(1, Math.ceil(H * SMOKE_SCALE));
+    smokeDrawn = false;
+  }
+
+  function drawSmoke(now) {
+    smokeTick++;
+
+    // 装载率驱动的压力：50% 装载率开始有压力，100% 时压力 = 1
+    const load = smoke.length / CFG.maxSmoke;
+    const targetPressure = Math.max(0, Math.min(1, (load - 0.5) / 0.5));
+    const pEase = targetPressure > overflowPressure ? 0.15 : 0.05;
+    overflowPressure += (targetPressure - overflowPressure) * pEase;
+
+    if (smokeTick % 2 === 1 || !smokeDrawn) {
+      const lw = smokeLayer.width;
+      const lh = smokeLayer.height;
+      sctx.clearRect(0, 0, lw, lh);
+
+      let any = false;
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      const total = smoke.length;
+
+      for (let i = total - 1; i >= 0; i--) {
+        const p = smoke[i];
+
+        // i 越小越老（push 到末尾）。ageRank: 0 = 最老，1 = 最新。
+        const ageRank = total > 1 ? i / (total - 1) : 0;
+
+        // 加速倍率：压力最大时，最老粒子 4 倍速消失，最新粒子不受影响
+        const boost = 1 + overflowPressure * 3 * (1 - ageRank);
+
+        const age = ((now - p.birth) / p.life) * boost;
+        if (age >= 1) {
+          // 走到这里时 alpha 已经接近 0，视觉上看不出“删除”
+          smoke.splice(i, 1);
+          continue;
+        }
+        const r = p.r0 + (p.r1 - p.r0) * age;
+        const fadeIn = Math.min(1, age / 0.15);
+        const alpha = p.alpha * fadeIn * Math.pow(1 - age, 1.7);
+        if (alpha < 0.003) continue;
+        any = true;
+        const x = p.x * SMOKE_SCALE;
+        const y = p.y * SMOKE_SCALE;
+        const rr = r * SMOKE_SCALE;
+        if (x - rr < x0) x0 = x - rr;
+        if (y - rr < y0) y0 = y - rr;
+        if (x + rr > x1) x1 = x + rr;
+        if (y + rr > y1) y1 = y + rr;
+        sctx.globalAlpha = alpha;
+        sctx.drawImage(smokeSprite, x - rr, y - rr, rr * 2, rr * 2);
+      }
+      sctx.globalAlpha = 1;
+      smokeDrawn = any;
+      if (any) {
+        smokeBX0 = Math.max(0, Math.floor(x0));
+        smokeBY0 = Math.max(0, Math.floor(y0));
+        smokeBX1 = Math.min(lw, Math.ceil(x1));
+        smokeBY1 = Math.min(lh, Math.ceil(y1));
+      }
+    }
+
+    if (smokeDrawn && smokeBX1 > smokeBX0 && smokeBY1 > smokeBY0) {
+      const sw = smokeBX1 - smokeBX0;
+      const sh = smokeBY1 - smokeBY0;
+      ctx.drawImage(
+        smokeLayer,
+        smokeBX0, smokeBY0, sw, sh,
+        smokeBX0 / SMOKE_SCALE, smokeBY0 / SMOKE_SCALE,
+        sw / SMOKE_SCALE, sh / SMOKE_SCALE
+      );
+    }
+  }
+
+  function drawBlades() {
+    const blades = field.blades;
+    const al = renderAlpha;
+
+    for (let bi = 0; bi < blades.length; bi++) {
+      const b = blades[bi];
+      const nodes = b.nodes;
+      const seg = b.seg;
+      const left = b.left;
+      const right = b.right;
+
+      for (let i = 0; i <= seg; i++) {
+        const p = nodes[i];
+        p.ix = p.px + (p.x - p.px) * al;
+        p.iy = p.py + (p.y - p.py) * al;
+      }
+
+      for (let i = 0; i <= seg; i++) {
+        const p = nodes[i];
+        const a = nodes[i > 0 ? i - 1 : 0];
+        const c = nodes[i < seg ? i + 1 : seg];
+        const dx = c.ix - a.ix;
+        const dy = c.iy - a.iy;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const halfW = b.baseW * b.wf[i] * 0.5 + 0.35;
+        const l = left[i];
+        const r = right[i];
+        l.x = p.ix + nx * halfW;
+        l.y = p.iy + ny * halfW;
+        r.x = p.ix - nx * halfW;
+        r.y = p.iy - ny * halfW;
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(left[0].x, left[0].y);
+      for (let i = 1; i < seg; i++) {
+        const mx = (left[i].x + left[i + 1].x) * 0.5;
+        const my = (left[i].y + left[i + 1].y) * 0.5;
+        ctx.quadraticCurveTo(left[i].x, left[i].y, mx, my);
+      }
+      ctx.lineTo(left[seg].x, left[seg].y);
+
+      for (let i = seg - 1; i >= 1; i--) {
+        const mx = (right[i].x + right[i - 1].x) * 0.5;
+        const my = (right[i].y + right[i - 1].y) * 0.5;
+        ctx.quadraticCurveTo(right[i].x, right[i].y, mx, my);
+      }
+      ctx.lineTo(right[0].x, right[0].y);
+      ctx.closePath();
+
+      ctx.fillStyle = b.fill;
+      ctx.fill();
+    }
+  }
+
+  function render(now) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    if (fogGrad) {
+      ctx.fillStyle = fogGrad;
+      ctx.fillRect(0, H * 0.55, W, H * 0.45);
+    }
+
+    drawSmoke(now);
+    drawFireflies(now);
+    drawBlades();
+
+    if (baseGrad) {
+      ctx.fillStyle = baseGrad;
+      ctx.fillRect(0, H - 60, W, 60);
+    }
+  }
+
+  // ---------------------------------------------------------------- 尺寸
   function resize() {
-    dpr = window.devicePixelRatio || 1;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
     W = window.innerWidth;
     H = window.innerHeight;
 
@@ -320,107 +779,81 @@
     canvas.height = Math.floor(H * dpr);
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
-
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    buildBlades();
-    if (fireflies.length === 0) buildFireflies();
+    buildField();
+    buildFog();
+    resizeSmokeLayer();
+    buildFireflies();
+
+    windLevel = 0;
+    for (let i = 0; i < 100; i++) simulate(CFG.dt);
   }
+
   resize();
-  window.addEventListener('resize', resize);
 
-  // ---------- 烟雾绘制 ----------
-  function drawSmoke(now) {
-    for (let i = smoke.length - 1; i >= 0; i--) {
-      const p = smoke[i];
-      const age = (now - p.birth) / p.life;
+  let resizeTimer = 0;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 120);
+  });
 
-      if (age >= 1) {
-        smoke.splice(i, 1);
-        continue;
-      }
+  // ---------------------------------------------------------------- 事件
+  window.addEventListener('mousemove', function (e) {
+    setPointer(e.clientX, e.clientY);
+    trailTo(e.clientX, e.clientY);
+  }, { passive: true });
 
-      const r = p.r0 + (p.r1 - p.r0) * Math.pow(age, 0.7);
+  window.addEventListener('mouseleave', releasePointer);
 
-      const fadeIn = Math.min(1, age / 0.12);
-      const fadeOut = Math.pow(1 - age, 1.9);
-      const alpha = p.alpha * fadeIn * fadeOut;
-
-      if (alpha < 0.003) continue;
-
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(smokeSprite, p.x - r, p.y - r, r * 2, r * 2);
+  window.addEventListener('touchstart', function (e) {
+    const t = e.touches[0];
+    if (t) {
+      setPointer(t.clientX, t.clientY);
+      lastX = t.clientX;
+      lastY = t.clientY;
     }
-    ctx.globalAlpha = 1;
-  }
+  }, { passive: true });
 
-  // ---------- 主循环 ----------
-  let lastTime = performance.now();
+  window.addEventListener('touchmove', function (e) {
+    const t = e.touches[0];
+    if (t) {
+      setPointer(t.clientX, t.clientY);
+      trailTo(t.clientX, t.clientY);
+    }
+  }, { passive: true });
+
+  window.addEventListener('touchend', releasePointer);
+  window.addEventListener('touchcancel', releasePointer);
+  window.addEventListener('blur', releasePointer);
+
+  // ---------------------------------------------------------------- 主循环
+  const DT = CFG.dt;
+  let lastTime = 0;
+  let acc = 0;
+  let renderAlpha = 1;
 
   function frame(now) {
-    const dt = Math.min(now - lastTime, 32);
-    lastTime = now;
-
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, W, H);
-
-    drawSmoke(now);
-
-    updateFireflies(now, dt);
-    drawFireflies(now);
-
-    // ---------- 草丛 ----------
-    const globalSway = Math.sin(now * SWAY_SPEED) * WIND_DRIFT;
-
-    for (const b of blades) {
-      const sway =
-        Math.sin(now * SWAY_SPEED * b.speedJitter + b.phase) * SWAY_AMPLITUDE;
-
-      let push = 0;
-      if (mouse.active) {
-        const tipX = b.baseX + sway + globalSway + b.bend;
-        const tipY = b.baseY - b.height;
-
-        const dx = tipX - mouse.x;
-        const dy = tipY - mouse.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < MOUSE_RADIUS && dist > 0.001) {
-          const force = (1 - dist / MOUSE_RADIUS) * MOUSE_PUSH;
-          const dir = dx >= 0 ? 1 : -1;
-          push = dir * force;
-        }
-      }
-
-      b.targetOffset = push;
-
-      const force = (b.targetOffset - b.offset) * SPRING;
-      b.velocity += force;
-      b.velocity *= DAMPING;
-      b.offset += b.velocity;
-
-      const tipX = b.baseX + sway + globalSway + b.bend + b.offset;
-      const tipY = b.baseY - b.height;
-
-      const halfW = b.baseWidth / 2;
-      const leftBaseX = b.baseX - halfW;
-      const rightBaseX = b.baseX + halfW;
-
-      // 控制点：稍微上移 + 向外鼓得更多，底部轮廓更圆润柔软
-      const ctrlY = b.baseY - b.height * 0.58;
-      const leftCtrlX = leftBaseX + (tipX - leftBaseX) * 0.32 - halfW * 1.15;
-      const rightCtrlX = rightBaseX + (tipX - rightBaseX) * 0.32 + halfW * 1.15;
-
-      ctx.beginPath();
-      ctx.moveTo(leftBaseX, b.baseY);
-      ctx.quadraticCurveTo(leftCtrlX, ctrlY, tipX, tipY);
-      ctx.quadraticCurveTo(rightCtrlX, ctrlY, rightBaseX, b.baseY);
-      ctx.closePath();
-
-      ctx.fillStyle = 'rgba(255, 255, 255, ' + b.alpha + ')';
-      ctx.fill();
+    if (!lastTime) {
+      lastTime = now;
+      requestAnimationFrame(frame);
+      return;
     }
+    const delta = Math.min(64, now - lastTime);
+    lastTime = now;
+    acc += delta / 1000;
 
+    let steps = 0;
+    while (acc >= DT && steps < 3) {
+      simulate(DT);
+      acc -= DT;
+      steps++;
+    }
+    if (steps === 3) acc = 0;
+
+    renderAlpha = Math.max(0, Math.min(1, acc / DT));
+
+    render(now);
     requestAnimationFrame(frame);
   }
 
