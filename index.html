@@ -43,7 +43,6 @@
 
   // ---------------------------------------------------------------- 参数
   const CFG = {
-    // 生长
     density: 0.5,
     minBlades: 500,
     maxBlades: 950,
@@ -53,7 +52,6 @@
     widthMax: 6.5,
     tuftChance: 0.3,
 
-    // 物理
     dt: 1 / 60,
     gravity: 260,
     airDrag: 0.996,
@@ -64,22 +62,18 @@
     bendTip: 0.07,
     maxSpeed: 1600,
 
-    // 风
     windAcc: 5500,
 
-    // 指针
     mouseRadius: 260,
     mouseWind: 13500,
     mouseStep: 0.45,
 
-    // 烟雾
     smokeLifeMin: 1300,
     smokeLifeMax: 2300,
     smokeStep: 1.5,
     maxStepsPerMove: 240,
     maxSmoke: 1500,
 
-    // 萤火虫
     fireflyCount: 26,
     fireflyAttractRadius: 300,
     fireflyAttractProb: 0.06,
@@ -88,7 +82,6 @@
     fireflyDrift: 0.03,
     fireflyGrassRatio: 0.45,
 
-    // 流星（频率调低）
     meteorIntervalMin: 2500,
     meteorIntervalMax: 6500,
     meteorBurstMin: 1,
@@ -207,7 +200,6 @@
     const baseAngle = Math.PI * (0.18 + Math.random() * 0.09);
     const baseX = -80 + Math.random() * (W * 0.55 + 80);
     const baseY = -80 - Math.random() * 80;
-    // 同批内错开时间略缩短，配合更低的频率
     const spreadTime = count > 1 ? 140 : 0;
 
     for (let i = 0; i < count; i++) {
@@ -227,7 +219,8 @@
         vy: Math.sin(angle) * speed,
         tailLen: 110 + Math.random() * 130,
         width: 1.1 + Math.random() * 0.9,
-        life: 0.85 + Math.random() * 0.6,
+        // 生命期加长：消失更慢
+        life: 1.15 + Math.random() * 0.7,
         age: 0,
         delay: delay / 1000
       });
@@ -271,7 +264,7 @@
 
       let alpha = 1;
       if (t < 0.08) alpha = t / 0.08;
-      else if (t > 0.82) alpha = (1 - t) / 0.18;
+      else if (t > 0.88) alpha = (1 - t) / 0.12;   // 渐出区间推后，消失更慢
       if (alpha <= 0) continue;
 
       const sp = Math.sqrt(m.vx * m.vx + m.vy * m.vy) || 1;
