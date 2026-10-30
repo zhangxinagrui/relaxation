@@ -43,6 +43,7 @@
 
   // ---------------------------------------------------------------- 参数
   const CFG = {
+    // 生长
     density: 0.5,
     minBlades: 500,
     maxBlades: 950,
@@ -52,6 +53,7 @@
     widthMax: 6.5,
     tuftChance: 0.3,
 
+    // 物理
     dt: 1 / 60,
     gravity: 260,
     airDrag: 0.996,
@@ -62,18 +64,22 @@
     bendTip: 0.07,
     maxSpeed: 1600,
 
+    // 风
     windAcc: 5500,
 
+    // 指针
     mouseRadius: 260,
     mouseWind: 13500,
     mouseStep: 0.45,
 
+    // 烟雾
     smokeLifeMin: 1300,
     smokeLifeMax: 2300,
     smokeStep: 1.5,
     maxStepsPerMove: 240,
     maxSmoke: 1500,
 
+    // 萤火虫
     fireflyCount: 26,
     fireflyAttractRadius: 300,
     fireflyAttractProb: 0.06,
@@ -82,11 +88,11 @@
     fireflyDrift: 0.03,
     fireflyGrassRatio: 0.45,
 
-    // 流星（新增）
-    meteorIntervalMin: 1200,
-    meteorIntervalMax: 3500,
+    // 流星（频率调低）
+    meteorIntervalMin: 2500,
+    meteorIntervalMax: 6500,
     meteorBurstMin: 1,
-    meteorBurstMax: 4
+    meteorBurstMax: 2
   };
 
   const AUTO = /[?&]auto\b/.test(location.search);
@@ -188,7 +194,7 @@
     lastX = x; lastY = y;
   }
 
-  // ---------------------------------------------------------------- 流星（新增）
+  // ---------------------------------------------------------------- 流星
   const meteors = [];
   let meteorTimer = 0;
   let meteorInterval = CFG.meteorIntervalMin +
@@ -201,7 +207,8 @@
     const baseAngle = Math.PI * (0.18 + Math.random() * 0.09);
     const baseX = -80 + Math.random() * (W * 0.55 + 80);
     const baseY = -80 - Math.random() * 80;
-    const spreadTime = count > 1 ? 180 : 0;
+    // 同批内错开时间略缩短，配合更低的频率
+    const spreadTime = count > 1 ? 140 : 0;
 
     for (let i = 0; i < count; i++) {
       const offX = (Math.random() - 0.5) * 360;
@@ -274,7 +281,6 @@
       const tailX = m.x - ux * m.tailLen;
       const tailY = m.y - uy * m.tailLen;
 
-      // 1) 最外层光晕
       {
         const g = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
         g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 0.10) + ')');
@@ -290,7 +296,6 @@
         ctx.stroke();
       }
 
-      // 2) 中层
       {
         const g = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
         g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 0.38) + ')');
@@ -305,7 +310,6 @@
         ctx.stroke();
       }
 
-      // 3) 细亮核心
       {
         const g = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
         g.addColorStop(0, 'rgba(255,255,255,' + (alpha * 1.0) + ')');
@@ -320,7 +324,6 @@
         ctx.stroke();
       }
 
-      // 头部大光晕
       {
         const r = m.width * 9;
         const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, r);
@@ -334,7 +337,6 @@
         ctx.fill();
       }
 
-      // 头部中等光晕
       {
         const r = m.width * 4.5;
         const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, r);
@@ -348,7 +350,6 @@
         ctx.fill();
       }
 
-      // 头部亮核
       {
         const r = m.width * 1.8;
         const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, r);
@@ -779,7 +780,7 @@
 
     stepBlades(dt);
     stepFireflies(dt);
-    updateMeteors(dt);   // 新增
+    updateMeteors(dt);
 
     const targetPower = pointer.active ? 1 : 0;
     const ease = targetPower > pointerPower ? 0.045 : 0.015;
@@ -933,7 +934,7 @@
     }
 
     drawSmoke(now);
-    drawMeteors();       // 新增
+    drawMeteors();
     drawFireflies(now);
     drawBlades();
 
