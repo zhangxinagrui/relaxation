@@ -219,8 +219,8 @@
         vy: Math.sin(angle) * speed,
         tailLen: 110 + Math.random() * 130,
         width: 1.1 + Math.random() * 0.9,
-        // 生命期加长：消失更慢
-        life: 1.15 + Math.random() * 0.7,
+        // 生命期：比上一版长一些
+        life: 1.05 + Math.random() * 0.55,
         age: 0,
         delay: delay / 1000
       });
@@ -256,16 +256,28 @@
   }
 
   function drawMeteors() {
+    // 在 60% 高度开始额外淡出，78% 高度完全消失 —— 保证流星在草丛前就看不见
+    const yFadeStart = H * 0.60;
+    const yFadeEnd = H * 0.78;
+
     for (let i = 0; i < meteors.length; i++) {
       const m = meteors[i];
       if (m.delay > 0) continue;
 
       const t = m.age / m.life;
 
+      // 时间淡出：70% 开始，末端平滑趋近 0，不再突然掉没
       let alpha = 1;
       if (t < 0.08) alpha = t / 0.08;
-      else if (t > 0.88) alpha = (1 - t) / 0.12;   // 渐出区间推后，消失更慢
+      else if (t > 0.70) alpha = Math.pow((1 - t) / 0.30, 1.3);
       if (alpha <= 0) continue;
+
+      // y 轴强制淡出：末端用幂曲线平滑归零
+      if (m.y > yFadeStart) {
+        const k = Math.min(1, (m.y - yFadeStart) / (yFadeEnd - yFadeStart));
+        alpha *= Math.pow(1 - k, 1.4);
+        if (alpha <= 0.002) continue;
+      }
 
       const sp = Math.sqrt(m.vx * m.vx + m.vy * m.vy) || 1;
       const ux = m.vx / sp;
