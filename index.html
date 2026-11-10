@@ -82,6 +82,12 @@
     fireflyDrift: 0.03,
     fireflyGrassRatio: 0.45,
 
+    // 点击弹开萤火虫
+    shockwaveRadius: 220,       // 影响半径
+    shockwaveStrength: 9,       // 初速（px/帧）
+    shockwaveJitterMin: 0.7,    // 力度随机下限
+    shockwaveJitterMax: 1.3,    // 力度随机上限
+
     meteorIntervalMin: 2500,
     meteorIntervalMax: 6500,
     meteorBurstMin: 1,
@@ -130,7 +136,6 @@
   // ---------------------------------------------------------------- 烟雾
   const smoke = [];
 
-  // 最近 4 个鼠标采样点，用于 Catmull-Rom 插值
   const trailHistory = [];
   const MAX_TRAIL_HISTORY = 4;
 
@@ -171,10 +176,7 @@
     });
   }
 
-  // 每个新采样点到来时，用 Catmull-Rom（转贝塞尔）平滑连接「上一点」到「当前点」。
-  // 曲线精确经过每个采样点；切线由前后采样点共同决定，所以转弯不再硬折。
   function trailTo(x, y) {
-    // 去重：与上一个采样点几乎重合时跳过
     if (trailHistory.length > 0) {
       const last = trailHistory[trailHistory.length - 1];
       const ddx = last.x - x;
@@ -191,12 +193,10 @@
     const pCur = trailHistory[n - 1];
     const pPrev = trailHistory[n - 2];
 
-    // pPrevPrev：更前一个点；若不足则用镜像
     const pPrevPrev = n >= 3
       ? trailHistory[n - 3]
       : { x: 2 * pPrev.x - pCur.x, y: 2 * pPrev.y - pCur.y };
 
-    // pNext：未来点未知，用镜像保证曲线在 pCur 处平滑过渡
     const pNext = { x: 2 * pCur.x - pPrev.x, y: 2 * pCur.y - pPrev.y };
 
     const dx = pCur.x - pPrev.x;
@@ -204,7 +204,6 @@
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist < 0.5 || dist > 1500) return;
 
-    // Catmull-Rom → 三次贝塞尔控制点
     const bx0 = pPrev.x;
     const by0 = pPrev.y;
     const bx1 = pPrev.x + (pCur.x - pPrevPrev.x) / 6;
@@ -442,7 +441,12 @@
         wanderAngle: angle,
         targetAngle: angle,
         blinkSpeed: 0.0008 + Math.random() * 0.0015,
-        phase: Math.random() * Math.PI * 2
+        phase: Math.random() * Math.PI * 2,
+        // 弹开速度
+        kx: 0,
+        ky: 0,
+        // 每只萤火虫自己的衰减系数，让弹开距离不规则
+        shockDecay: 0.92 + Math.random() * 0.04
       });
     }
   }
@@ -492,6 +496,20 @@
       f.wanderAngle = angleLerp(f.wanderAngle, f.targetAngle, CFG.fireflyTurnEase * dtf);
       f.x += Math.cos(f.wanderAngle) * f.speed * dtf;
       f.y += Math.sin(f.wanderAngle) * f.speed * dtf;
+
+      // 弹开速度的位移 + 指数衰减
+      // 每只萤火虫的衰减系数不同，所以飞出距离不同
+      if (f.kx !== 0 || f.ky !== 0) {
+        f.x += f.kx * dtf;
+        f.y += f.ky * dtf;
+        const decay = Math.pow(f.shockDecay, dtf);
+        f.kx *= decay;
+        f.ky *= decay;
+        if (Math.abs(f.kx) < 0.01 && Math.abs(f.ky) < 0.01) {
+          f.kx = 0;
+          f.ky = 0;
+        }
+      }
     }
   }
 
@@ -1016,9 +1034,7 @@
   });
 
   // ---------------------------------------------------------------- 事件
-
   function handlePointerMove(e) {
-    // 用 getCoalescedEvents 拿到浏览器合并前的所有原始采样点
     if (typeof e.getCoalescedEvents === 'function') {
       const events = e.getCoalescedEvents();
       if (events.length > 0) {
@@ -1036,6 +1052,34 @@
 
   window.addEventListener('mousemove', handlePointerMove, { passive: true });
 
+  // 点击左键弹开周围萤火虫
+  window.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) return;
+
+    const cx = e.clientX;
+    const cy = e.clientY;
+    const R = CFG.shockwaveRadius;
+    const R2 = R * R;
+    const jMin = CFG.shockwaveJitterMin;
+    const jMax = CFG.shockwaveJitterMax;
+
+    for (let i = 0; i < fireflies.length; i++) {
+      const f = fireflies[i];
+      const dx = f.x - cx;
+      const dy = f.y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < R2 && d2 > 1) {
+        const d = Math.sqrt(d2);
+        const fall = 1 - d / R;
+        // 力度随机：每只萤火虫被弹开的距离不同
+        const jitter = jMin + Math.random() * (jMax - jMin);
+        const force = CFG.shockwaveStrength * fall * jitter;
+        f.kx += (dx / d) * force;
+        f.ky += (dy / d) * force;
+      }
+    }
+  });
+
   window.addEventListener('mouseleave', releasePointer);
 
   window.addEventListener('touchstart', function (e) {
@@ -1044,6 +1088,29 @@
       setPointer(t.clientX, t.clientY);
       trailHistory.length = 0;
       trailHistory.push({ x: t.clientX, y: t.clientY });
+
+      // 触摸点击也触发弹开
+      const cx = t.clientX;
+      const cy = t.clientY;
+      const R = CFG.shockwaveRadius;
+      const R2 = R * R;
+      const jMin = CFG.shockwaveJitterMin;
+      const jMax = CFG.shockwaveJitterMax;
+
+      for (let i = 0; i < fireflies.length; i++) {
+        const f = fireflies[i];
+        const dx = f.x - cx;
+        const dy = f.y - cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < R2 && d2 > 1) {
+          const d = Math.sqrt(d2);
+          const fall = 1 - d / R;
+          const jitter = jMin + Math.random() * (jMax - jMin);
+          const force = CFG.shockwaveStrength * fall * jitter;
+          f.kx += (dx / d) * force;
+          f.ky += (dy / d) * force;
+        }
+      }
     }
   }, { passive: true });
 
