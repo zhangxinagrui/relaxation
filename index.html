@@ -82,11 +82,11 @@
     fireflyDrift: 0.03,
     fireflyGrassRatio: 0.45,
 
-    // 点击弹开萤火虫
-    shockwaveRadius: 220,       // 影响半径
-    shockwaveStrength: 9,       // 初速（px/帧）
-    shockwaveJitterMin: 0.7,    // 力度随机下限
-    shockwaveJitterMax: 1.3,    // 力度随机上限
+    // 点击弹开萤火虫（新增）
+    shockwaveRadius: 220,
+    shockwaveStrength: 9,
+    shockwaveJitterMin: 0.7,
+    shockwaveJitterMax: 1.3,
 
     meteorIntervalMin: 2500,
     meteorIntervalMax: 6500,
@@ -442,10 +442,9 @@
         targetAngle: angle,
         blinkSpeed: 0.0008 + Math.random() * 0.0015,
         phase: Math.random() * Math.PI * 2,
-        // 弹开速度
+        // 弹开速度 + 每只萤火虫自己的衰减系数（新增）
         kx: 0,
         ky: 0,
-        // 每只萤火虫自己的衰减系数，让弹开距离不规则
         shockDecay: 0.92 + Math.random() * 0.04
       });
     }
@@ -497,8 +496,7 @@
       f.x += Math.cos(f.wanderAngle) * f.speed * dtf;
       f.y += Math.sin(f.wanderAngle) * f.speed * dtf;
 
-      // 弹开速度的位移 + 指数衰减
-      // 每只萤火虫的衰减系数不同，所以飞出距离不同
+      // 弹开速度的位移 + 每只独立衰减（新增）
       if (f.kx !== 0 || f.ky !== 0) {
         f.x += f.kx * dtf;
         f.y += f.ky * dtf;
@@ -522,6 +520,30 @@
       ctx.drawImage(fireflySprite, f.x - glowSize / 2, f.y - glowSize / 2, glowSize, glowSize);
     }
     ctx.globalAlpha = 1;
+  }
+
+  // 点击弹开周围萤火虫（新增）
+  function triggerShockwave(cx, cy) {
+    const R = CFG.shockwaveRadius;
+    const R2 = R * R;
+    const jMin = CFG.shockwaveJitterMin;
+    const jMax = CFG.shockwaveJitterMax;
+
+    for (let i = 0; i < fireflies.length; i++) {
+      const f = fireflies[i];
+      const dx = f.x - cx;
+      const dy = f.y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < R2 && d2 > 1) {
+        const d = Math.sqrt(d2);
+        const fall = 1 - d / R;
+        // 每只萤火虫力度不同，弹开距离不规则
+        const jitter = jMin + Math.random() * (jMax - jMin);
+        const force = CFG.shockwaveStrength * fall * jitter;
+        f.kx += (dx / d) * force;
+        f.ky += (dy / d) * force;
+      }
+    }
   }
 
   // ---------------------------------------------------------------- 草场
@@ -1034,6 +1056,7 @@
   });
 
   // ---------------------------------------------------------------- 事件
+
   function handlePointerMove(e) {
     if (typeof e.getCoalescedEvents === 'function') {
       const events = e.getCoalescedEvents();
@@ -1052,32 +1075,10 @@
 
   window.addEventListener('mousemove', handlePointerMove, { passive: true });
 
-  // 点击左键弹开周围萤火虫
+  // 点击左键弹开周围萤火虫（新增）
   window.addEventListener('mousedown', function (e) {
     if (e.button !== 0) return;
-
-    const cx = e.clientX;
-    const cy = e.clientY;
-    const R = CFG.shockwaveRadius;
-    const R2 = R * R;
-    const jMin = CFG.shockwaveJitterMin;
-    const jMax = CFG.shockwaveJitterMax;
-
-    for (let i = 0; i < fireflies.length; i++) {
-      const f = fireflies[i];
-      const dx = f.x - cx;
-      const dy = f.y - cy;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < R2 && d2 > 1) {
-        const d = Math.sqrt(d2);
-        const fall = 1 - d / R;
-        // 力度随机：每只萤火虫被弹开的距离不同
-        const jitter = jMin + Math.random() * (jMax - jMin);
-        const force = CFG.shockwaveStrength * fall * jitter;
-        f.kx += (dx / d) * force;
-        f.ky += (dy / d) * force;
-      }
-    }
+    triggerShockwave(e.clientX, e.clientY);
   });
 
   window.addEventListener('mouseleave', releasePointer);
@@ -1088,29 +1089,8 @@
       setPointer(t.clientX, t.clientY);
       trailHistory.length = 0;
       trailHistory.push({ x: t.clientX, y: t.clientY });
-
-      // 触摸点击也触发弹开
-      const cx = t.clientX;
-      const cy = t.clientY;
-      const R = CFG.shockwaveRadius;
-      const R2 = R * R;
-      const jMin = CFG.shockwaveJitterMin;
-      const jMax = CFG.shockwaveJitterMax;
-
-      for (let i = 0; i < fireflies.length; i++) {
-        const f = fireflies[i];
-        const dx = f.x - cx;
-        const dy = f.y - cy;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < R2 && d2 > 1) {
-          const d = Math.sqrt(d2);
-          const fall = 1 - d / R;
-          const jitter = jMin + Math.random() * (jMax - jMin);
-          const force = CFG.shockwaveStrength * fall * jitter;
-          f.kx += (dx / d) * force;
-          f.ky += (dy / d) * force;
-        }
-      }
+      // 触摸点击也触发弹开（新增）
+      triggerShockwave(t.clientX, t.clientY);
     }
   }, { passive: true });
 
